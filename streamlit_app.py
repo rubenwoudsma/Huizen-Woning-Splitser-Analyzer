@@ -49,10 +49,12 @@ def main() -> None:
     st.title("Huizen Woningsplitsing Analyzer")
 
     candidates = load_csv("split_candidates_public.csv")
+    candidate_points = load_geojson("split_candidates_public.geojson")
     split_buurt = load_csv("split_potential_buurt_public.csv")
     buurten = load_geojson("buurten_huizen.geojson")
     projects = load_geojson("wimra_1200_list_geocoded.geojson")
     realisatie = load_csv("wimra_realisatiegraad_summary.csv")
+
 
     left, right = st.columns([1, 3])
 
@@ -93,26 +95,14 @@ def main() -> None:
                     tooltip=f"{r.get('benaming', 'project')} | {r.get('status_bucket', '')}",
                 ).add_to(m)
 
-        if len(candidates) and "geometry" in candidates.columns:
-            g = gpd.GeoDataFrame(candidates, geometry="geometry", crs="EPSG:4326")
-            for _, r in g.dropna(subset=["geometry"]).head(2000).iterrows():
+        if len(candidate_points):
+            for _, r in candidate_points.dropna(subset=["geometry"]).head(2000).iterrows():
                 folium.CircleMarker(
                     location=[r.geometry.y, r.geometry.x],
                     radius=2,
                     tooltip=f"{r.get('oppervlakte_m2', '')} m2 | p<=2: {round(r.get('p_le_2', 0), 2)}",
                     fill=True,
-                ).add_to(m)
-
-        if show_heat:
-            folium.raster_layers.WmsTileLayer(
-                url=KEA_WMS,
-                name="KEA Gevoelstemperatuur buurt 2022",
-                layers="GevoelstemperatuurBuurt_2022",
-                fmt="image/png",
-                transparent=True,
-                overlay=True,
-                control=True,
-            ).add_to(m)
+        ).add_to(m)
 
         folium.LayerControl().add_to(m)
         st_folium(m, width=1100, height=650)
