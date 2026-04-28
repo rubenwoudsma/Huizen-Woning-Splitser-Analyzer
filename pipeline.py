@@ -30,22 +30,35 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
         gpkg = [f for f in z.namelist() if f.endswith(".gpkg")][0]
         z.extract(gpkg, zip_path.parent)
 
-    gdf = gpd.read_file(zip_path.parent / gpkg)
+    gpkg_path = zip_path.parent / gpkg
 
+    # 🔥 FIX: juiste layer kiezen
+    gdf = gpd.read_file(gpkg_path, layer="buurten")
+
+    # kolommen normaliseren
     gdf.columns = [c.lower() for c in gdf.columns]
 
-    # filter Huizen
-    gdf = gdf[gdf["gm_naam"].str.lower() == "huizen"]
+    # 🔥 robuust filteren (kolomnaam verschilt soms)
+    if "gm_naam" in gdf.columns:
+        gdf = gdf[gdf["gm_naam"].str.lower() == "huizen"]
+    elif "gemeentenaam" in gdf.columns:
+        gdf = gdf[gdf["gemeentenaam"].str.lower() == "huizen"]
+    else:
+        raise ValueError("Geen gemeentenaam kolom gevonden in CBS data")
 
     gdf = gdf.to_crs(4326)
 
-    gdf.rename(columns={"bu_code": "buurtcode"}, inplace=True)
+    # kolom naam fix
+    if "bu_code" in gdf.columns:
+        gdf.rename(columns={"bu_code": "buurtcode"}, inplace=True)
+    elif "buurtcode" not in gdf.columns:
+        raise ValueError("Geen buurtcode kolom gevonden")
 
     return gdf
 
 
 # -------------------------
-# FAKE HOUSES GENEREREN
+# FAKE HOUSES
 # -------------------------
 
 def generate_fake_houses(buurten: gpd.GeoDataFrame, n=200) -> gpd.GeoDataFrame:
@@ -82,7 +95,7 @@ def generate_fake_houses(buurten: gpd.GeoDataFrame, n=200) -> gpd.GeoDataFrame:
 
 
 # -------------------------
-# SPLIT ANALYSE (TEST COMPATIBLE!)
+# SPLIT ANALYSIS
 # -------------------------
 
 def split_analysis(
@@ -105,10 +118,9 @@ def split_analysis(
 
     df["split_feasible"] = df["max_units_after_split"] >= 2
 
-    # 🔥 BELANGRIJK: dit is wat je test verwacht
+    # 🔥 belangrijk voor test
     df["units_added_if_split"] = df["max_units_after_split"] - 1
 
-    # fallback
     if "p_le_2" not in df.columns:
         df["p_le_2"] = 0.6
 
@@ -133,7 +145,7 @@ def main():
     buurten = load_cbs_buurten()
     buurten.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
 
-    print(f"Buurten: {len(buurten)}")
+    print(f"Buurten geladen: {len(buurten)}")
 
     # fake huizen
     houses = generate_fake_houses(buurten, n=300)
