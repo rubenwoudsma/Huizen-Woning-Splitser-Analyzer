@@ -9,28 +9,14 @@ import plotly.express as px
 import streamlit as st
 from streamlit_folium import st_folium
 
-
 PROCESSED = Path("data/processed")
-KEA_WMS = "https://apps.geodan.nl/public/data/org/gws/YWFMLMWERURF/kea_public/wms"
-
 
 st.set_page_config(page_title="Huizen Woningsplitsing Analyzer", layout="wide")
 
 
-def auth_gate() -> None:
-    expected = st.secrets.get("APP_PASSWORD")
-    if not expected:
-        return
-    if st.session_state.get("ok"):
-        return
-    pwd = st.text_input("Wachtwoord", type="password")
-    if st.button("Inloggen"):
-        if pwd == expected:
-            st.session_state["ok"] = True
-            st.rerun()
-        st.error("Onjuist wachtwoord.")
-    st.stop()
-
+# -------------------------
+# DATA LOADERS
+# -------------------------
 
 @st.cache_data
 def load_csv(name: str) -> pd.DataFrame:
@@ -42,106 +28,141 @@ def load_csv(name: str) -> pd.DataFrame:
 def load_geojson(name: str):
     path = PROCESSED / name
     if not path.exists():
-        st.warning(f"{name} ontbreekt")
         return gpd.GeoDataFrame()
     try:
         return gpd.read_file(path)
-    except Exception as e:
-        st.error(f"Fout bij laden {name}: {e}")
+    except Exception:
         return gpd.GeoDataFrame()
 
-st.write("Files in data/processed:", list(PROCESSED.glob("*")))
 
-def main() -> None:
-    auth_gate()
+# -------------------------
+# MAIN
+# -------------------------
+
+def main():
     st.title("Huizen Woningsplitsing Analyzer")
 
+    # DATA
     candidates = load_csv("split_candidates_public.csv")
     candidate_points = load_geojson("split_candidates_public.geojson")
     split_buurt = load_csv("split_potential_buurt_public.csv")
     buurten = load_geojson("buurten_huizen.geojson")
-    projects = load_geojson("wimra_1200_list_geocoded.geojson")
-    realisatie = load_csv("wimra_realisatiegraad_summary.csv")
 
+    # FILTERS
+    col_filter, col_map = st.columns([1, 3])
 
-    left, right = st.columns([1, 3])
-
-    with left:
+    with col_filter:
         min_m2 = st.slider("Minimale oppervlakte", 80, 250, 120, 5)
-        show_heat = st.checkbox("Toon hittestress-WMS", value=True)
-        status_filter = ["alle"]
-        if "status_bucket" in projects.columns and len(projects):
-            status_filter += sorted(projects["status_bucket"].dropna().unique().tolist())
-        chosen_status = st.selectbox("Projectstatus", status_filter)
 
     if len(candidates):
-        candidates = candidates[candidates["oppervlakte_m2"] >= min_m2].copy()
+        candidates = candidates[candidates["oppervlakte_m2"] >= min_m2]
 
+    # KPI'S
     k1, k2, k3 = st.columns(3)
-    k1.metric("Kandidaat-adressen", int(candidates["adres_id"].nunique()) if len(candidates) else 0)
-    k2.metric("Verwachte extra woningen", round(float(candidates["expected_units_added"].sum()), 1) if len(candidates) else 0.0)
-    k3.metric("Buurten met potentieel", int(split_buurt["buurtcode"].nunique()) if len(split_buurt) else 0)
 
-    with right:
+    k1.metric(
+        "Kandidaat-adressen",
+        int(candidates["adres_id"].nunique()) if len(candidates) else 0
+    )
+
+    k2.metric(
+        "Verwachte extra woningen",
+        round(float(candidates["expected_units_added"].sum()), 1) if len(candidates) else 0
+    )
+
+    k3.metric(
+        "Buurten met potentieel",
+        int(split_buurt["buurtcode"].nunique()) if len(split_buurt) else 0
+    )
+
+    # -------------------------
+    # KAART
+    # -------------------------
+
+    with col_map:
         m = folium.Map(location=[52.299, 5.241], zoom_start=12, tiles="cartodbpositron")
-        if len(buurten):
+
+        # KOPPEL BUURTEN AAN DATA
+        if len(buurten) and len(split_buurt):
             merged = buurten.merge(split_buurt, on="buurtcode", how="left")
-            folium.GeoJson(
-                merged.to_json(),
-                tooltip=folium.GeoJsonTooltip(fields=["buurtnaam", "expected_units_added"]),
-                name="Split potentieel per buurt",
+            merged["expected_units_added"] = merged["expected_units_added"].fillna(0)
+
+            # CHOROPLETH (belangrijk!)
+            folium.Choropleth(
+                geo_data=merged,
+                data=merged,
+                columns=["buurtcode", "expected_units_added"],
+                key_on="feature.properties.buurtcode",
+                fill_color="YlOrRd",
+                fill_opacity=0.7,
+                line_opacity=0.3,
+                legend_name="Splitsingspotentieel",
             ).add_to(m)
 
-        if len(projects):
-            p = projects.copy()
-            if chosen_status != "alle":
-                p = p[p["status_bucket"] == chosen_status].copy()
-            for _, r in p.dropna(subset=["geometry"]).iterrows():
-                folium.CircleMarker(
-                    location=[r.geometry.y, r.geometry.x],
-                    radius=4,
-                    tooltip=f"{r.get('benaming', 'project')} | {r.get('status_bucket', '')}",
-                ).add_to(m)
+            # TOOLTIP + RANDEN
+            folium.GeoJson(
+                merged,
+                style_function=lambda x: {
+                    "fillOpacity": 0,
+                    "color": "black",
+                    "weight": 0.5,
+                },
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["buurtcode", "expected_units_added"],
+                    aliases=["Buurt", "Potentieel"],
+                ),
+            ).add_to(m)
 
+        # WONINGEN (punten)
         if len(candidate_points):
-            for _, r in candidate_points.dropna(subset=["geometry"]).head(2000).iterrows():
+            for _, r in candidate_points.iterrows():
                 folium.CircleMarker(
                     location=[r.geometry.y, r.geometry.x],
-                    radius=2,
-                    tooltip=f"{r.get('oppervlakte_m2', '')} m2 | p<=2: {round(r.get('p_le_2', 0), 2)}",
+                    radius=3,
+                    color="blue",
                     fill=True,
-        ).add_to(m)
+                    fill_opacity=0.6,
+                    tooltip=f"""
+                    Oppervlakte: {round(r.get('oppervlakte_m2', 0))} m²
+                    Kans: {round(r.get('p_le_2', 0), 2)}
+                    """,
+                ).add_to(m)
 
         folium.LayerControl().add_to(m)
         st_folium(m, width=1100, height=650)
+
+    # -------------------------
+    # GRAFIEKEN
+    # -------------------------
 
     c1, c2 = st.columns(2)
 
     with c1:
         if len(split_buurt):
             fig = px.bar(
-                split_buurt.sort_values("expected_units_added", ascending=False).head(15),
+                split_buurt.sort_values("expected_units_added", ascending=False).head(10),
                 x="buurtcode",
                 y="expected_units_added",
-                title="Top buurten naar verwacht splitsingspotentieel",
+                title="Top buurten (splitsingspotentieel)",
             )
             st.plotly_chart(fig, use_container_width=True)
 
     with c2:
-        if len(realisatie):
-            fig = px.bar(
-                realisatie,
-                x="status_bucket",
-                y="woningaantal",
-                title="1.200-lijst naar statusklasse",
+        if len(candidates):
+            fig = px.histogram(
+                candidates,
+                x="oppervlakte_m2",
+                nbins=20,
+                title="Verdeling woningoppervlak",
             )
             st.plotly_chart(fig, use_container_width=True)
 
+    # DOWNLOAD
     if len(candidates):
         st.download_button(
-            "Download kandidaat-adressen als CSV",
+            "Download data",
             data=candidates.to_csv(index=False).encode("utf-8"),
-            file_name="split_candidates_public.csv",
+            file_name="split_candidates.csv",
             mime="text/csv",
         )
 
