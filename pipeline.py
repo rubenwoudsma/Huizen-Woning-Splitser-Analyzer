@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import math
-import zipfile
+import random
 from pathlib import Path
 
 import geopandas as gpd
@@ -10,155 +9,156 @@ import requests
 import yaml
 from shapely.geometry import Point
 
-CBS_BASE = "https://datasets.cbs.nl/odata/v1/CBS"
-BAG_BASE = "https://api.pdok.nl/kadaster/bag/ogc/v2"
-LOC_BASE = "https://api.pdok.nl/bzk/locatieserver/search/v3_1"
+CBS_GEO_URL = "https://geodata.cbs.nl/files/Wijkenbuurtkaart/WijkBuurtkaart_2024_v2.zip"
 
 
 # -------------------------
-# CONFIG & API HELPERS
+# CONFIG
 # -------------------------
 
 def load_config(path: str = "params.yml") -> dict:
-    with open(path, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return yaml.safe_load(fh)
+    except Exception:
+        return {}
 
 
-def cbs_table(table_id: str) -> pd.DataFrame:
-    url = f"{CBS_BASE}/{table_id}/TypedDataSet"
-    rows = []
-    while url:
-        res = requests.get(url, timeout=60)
-        res.raise_for_status()
-        js = res.json()
-        rows.extend(js.get("value", []))
-        url = js.get("@odata.nextLink")
-    return pd.DataFrame(rows)
+# -------------------------
+# DOWNLOAD CBS GEOMETRY
+# -------------------------
+
+def load_cbs_buurten() -> gpd.GeoDataFrame:
+    zip_path = Path("data/raw/cbs.zip")
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not zip_path.exists():
+        r = requests.get(CBS_GEO_URL, timeout=120)
+        r.raise_for_status()
+        zip_path.write_bytes(r.content)
+
+    import zipfile
+    with zipfile.ZipFile(zip_path, "r") as z:
+        gpkg = [f for f in z.namelist() if f.endswith(".gpkg")][0]
+        z.extract(gpkg, zip_path.parent)
+        gpkg_path = zip_path.parent / gpkg
+
+    gdf = gpd.read_file(gpkg_path)
+
+    # normaliseer kolommen
+    gdf.columns = [c.lower() for c in gdf.columns]
+
+    return gdf
 
 
-def pdok_items(collection: str, bbox: list[float], limit: int = 1000) -> gpd.GeoDataFrame:
-    url = f"{BAG_BASE}/collections/{collection}/items"
-    params = {"f": "json", "bbox": ",".join(map(str, bbox)), "limit": limit}
-    feats = []
+# -------------------------
+# GENERATE FAKE HOUSES
+# -------------------------
 
-    while url:
-        res = requests.get(url, params=params if "?" not in url else None, timeout=60)
-        res.raise_for_status()
-        js = res.json()
-        feats.extend(js.get("features", []))
+def generate_fake_houses(buurten: gpd.GeoDataFrame, n=200) -> gpd.GeoDataFrame:
+    huizen = buurten.copy()
 
-        nxt = None
-        for link in js.get("links", []):
-            if link.get("rel") == "next":
-                nxt = link.get("href")
+    points = []
+    buurtcodes = []
+
+    for _ in range(n):
+        row = huizen.sample(1).iloc[0]
+        poly = row.geometry
+
+        if poly is None or poly.is_empty:
+            continue
+
+        minx, miny, maxx, maxy = poly.bounds
+
+        for _ in range(10):
+            p = Point(
+                random.uniform(minx, maxx),
+                random.uniform(miny, maxy)
+            )
+            if poly.contains(p):
+                points.append(p)
+                buurtcodes.append(row.get("bu_code") or row.get("buurtcode"))
                 break
 
-        url = nxt
-        params = None
+    df = pd.DataFrame({
+        "adres_id": [f"a{i}" for i in range(len(points))],
+        "oppervlakte_m2": [random.randint(80, 200) for _ in points],
+        "p_le_2": [random.uniform(0.4, 0.9) for _ in points],
+        "buurtcode": buurtcodes
+    })
 
-    return gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326")
-
-
-def loc_free(q: str, fq: str | None = None, rows: int = 1) -> dict:
-    params = {"q": q, "rows": rows}
-    if fq:
-        params["fq"] = fq
-
-    res = requests.get(f"{LOC_BASE}/free", params=params, timeout=60)
-    res.raise_for_status()
-    return res.json()
-
-
-def huizen_bbox() -> list[float]:
-    doc = loc_free("Huizen", fq="type:gemeente", rows=1)["response"]["docs"][0]
-    bbox = doc["bbox"].replace("BOX(", "").replace(")", "").split(",")
-    xmin, ymin = [float(x) for x in bbox[0].split()]
-    xmax, ymax = [float(x) for x in bbox[1].split()]
-    return [xmin, ymin, xmax, ymax]
-
-
-def geocode_locatieserver(query: str) -> Point | None:
-    try:
-        res = requests.get(
-            f"{LOC_BASE}/free",
-            params={"q": query, "fq": "type:adres", "rows": 1, "fl": "centroide_ll"},
-            timeout=30,
-        )
-        res.raise_for_status()
-        docs = res.json().get("response", {}).get("docs", [])
-
-        if not docs:
-            return None
-
-        ll = docs[0].get("centroide_ll")
-        if not ll:
-            return None
-
-        coords = ll.replace("POINT(", "").replace(")", "").split()
-        lon, lat = map(float, coords)
-        return Point(lon, lat)
-
-    except Exception:
-        return None
+    return gpd.GeoDataFrame(df, geometry=points, crs="EPSG:4326")
 
 
 # -------------------------
-# DATA TRANSFORM
+# SPLIT ANALYSIS
 # -------------------------
 
-def split_analysis(candidates: pd.DataFrame,
-                   min_total_m2: float = 120,
-                   min_unit_m2: float = 50,
-                   net_efficiency: float = 0.9,
-                   adoption_rate: float = 0.10) -> pd.DataFrame:
+def split_analysis(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
 
-    df = candidates.copy()
-    df = df[df["oppervlakte_m2"] >= min_total_m2].copy()
+    df = df[df["oppervlakte_m2"] >= 120]
 
-    df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * net_efficiency
-    df["max_units_after_split"] = (df["netto_splitsbaar_m2"] / min_unit_m2).apply(math.floor).clip(upper=2)
-    df["split_feasible"] = df["max_units_after_split"] >= 2
-    df["units_added_if_split"] = df["max_units_after_split"] - 1
-    df["expected_units_added"] = df["units_added_if_split"] * df.get("p_le_2", 0.6) * adoption_rate
+    df["units_added"] = 1
+    df["expected_units_added"] = df["units_added"] * df["p_le_2"] * 0.1
 
     return df
 
 
 # -------------------------
-# MAIN PIPELINE
+# MAIN
 # -------------------------
 
-def main() -> None:
+def main():
     print("Pipeline gestart")
-
-    cfg = load_config("params.yml")
 
     out = Path("data/processed")
     out.mkdir(parents=True, exist_ok=True)
 
     # -------------------------
-    # Dummy fallback data (belangrijk!)
+    # CBS buurten laden
     # -------------------------
 
-    df = pd.DataFrame({
-        "adres_id": ["a1"],
-        "oppervlakte_m2": [150],
-        "p_le_2": [0.7],
-        "geometry": [Point(5.241, 52.299)]
-    })
+    buurten = load_cbs_buurten()
 
-    gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+    # filter Huizen
+    buurten = buurten[buurten["gm_naam"].str.lower() == "huizen"]
 
-    gdf.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
-    df.drop(columns="geometry").to_csv(out / "split_candidates_public.csv", index=False)
+    buurten = buurten.to_crs(4326)
 
-    pd.DataFrame({
-        "buurtcode": ["BU001"],
-        "expected_units_added": [5]
-    }).to_csv(out / "split_potential_buurt_public.csv", index=False)
+    buurten.rename(columns={"bu_code": "buurtcode"}, inplace=True)
 
-    # lege buurt file (voorkomt crash)
-    gpd.GeoDataFrame(geometry=[]).to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
+    buurten.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
+
+    print(f"Buurten geladen: {len(buurten)}")
+
+    # -------------------------
+    # fake woningen genereren
+    # -------------------------
+
+    houses = generate_fake_houses(buurten, n=300)
+
+    print(f"Huizen gegenereerd: {len(houses)}")
+
+    # -------------------------
+    # analyse
+    # -------------------------
+
+    candidates = split_analysis(houses)
+
+    # -------------------------
+    # save outputs
+    # -------------------------
+
+    candidates.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
+    candidates.drop(columns="geometry").to_csv(out / "split_candidates_public.csv", index=False)
+
+    by_buurt = (
+        candidates.groupby("buurtcode", as_index=False)["expected_units_added"]
+        .sum()
+    )
+
+    by_buurt.to_csv(out / "split_potential_buurt_public.csv", index=False)
 
     print("Pipeline klaar")
 
