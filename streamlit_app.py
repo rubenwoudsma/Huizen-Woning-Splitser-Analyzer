@@ -41,8 +41,14 @@ def load_csv(name: str) -> pd.DataFrame:
 @st.cache_data
 def load_geojson(name: str) -> gpd.GeoDataFrame:
     path = PROCESSED / name
-    return gpd.read_file(path) if path.exists() else gpd.GeoDataFrame()
+    if not path.exists():
+        return gpd.GeoDataFrame()
+    try:
+        return gpd.read_file(path)
+    except Exception:
+        return gpd.GeoDataFrame()
 
+st.write("Files in data/processed:", list(PROCESSED.glob("*")))
 
 def main() -> None:
     auth_gate()
