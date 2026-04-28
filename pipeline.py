@@ -94,13 +94,35 @@ def generate_fake_houses(buurten: gpd.GeoDataFrame, n=200) -> gpd.GeoDataFrame:
 # SPLIT ANALYSIS
 # -------------------------
 
-def split_analysis(df: pd.DataFrame) -> pd.DataFrame:
+def split_analysis(
+    df: pd.DataFrame,
+    min_total_m2: float = 120,
+    min_unit_m2: float = 50,
+    net_efficiency: float = 0.9,
+    adoption_rate: float = 0.10,
+) -> pd.DataFrame:
+
     df = df.copy()
 
-    df = df[df["oppervlakte_m2"] >= 120]
+    # filter op minimale grootte
+    df = df[df["oppervlakte_m2"] >= min_total_m2]
 
-    df["units_added"] = 1
-    df["expected_units_added"] = df["units_added"] * df["p_le_2"] * 0.1
+    # simpele splitslogica (max 2 woningen)
+    df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * net_efficiency
+    df["max_units_after_split"] = (
+        df["netto_splitsbaar_m2"] / min_unit_m2
+    ).apply(int).clip(upper=2)
+
+    df["split_feasible"] = df["max_units_after_split"] >= 2
+    df["units_added"] = df["max_units_after_split"] - 1
+
+    # fallback als p_le_2 ontbreekt
+    if "p_le_2" not in df.columns:
+        df["p_le_2"] = 0.6
+
+    df["expected_units_added"] = (
+        df["units_added"] * df["p_le_2"] * adoption_rate
+    )
 
     return df
 
