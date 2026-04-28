@@ -1,4 +1,7 @@
 {
-  "type": "FeatureCollection",
-  "features": []
+"type": "FeatureCollection",
+"name": "buurten_huizen",
+"features": [
+
+]
 }
