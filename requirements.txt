@@ -1,0 +1,15 @@
+pandas>=2.2
+numpy>=1.26
+requests>=2.32
+PyYAML>=6.0
+geopandas>=1.0
+shapely>=2.0
+pyogrio>=0.8
+pdfplumber>=0.11
+camelot-py>=0.11
+openpyxl>=3.1
+streamlit>=1.40
+folium>=0.17
+streamlit-folium>=0.22
+plotly>=5.24
+pytest>=8.3
