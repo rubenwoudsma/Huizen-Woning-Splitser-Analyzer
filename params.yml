@@ -1,0 +1,7 @@
+cbs:
+  kwb_table: "85984NED"
+  geometry_zip_url: "https://geodata.cbs.nl/files/Wijkenbuurtkaart/WijkBuurtkaart_2024_v2.zip"
+
+paths:
+  geometry_zip: "data/raw/WijkBuurtkaart_2024_v2.zip"
+  wimra_input_path: "data/raw/Bijlage-2-Ge-update-versie-van-de-zogeheten-1.200-lijst.pdf"
