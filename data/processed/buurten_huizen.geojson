@@ -1,5 +1,4 @@
-# na:
-# buurten = buurten[buurten["gemeentenaam"].astype(str).str.lower().eq("huizen")].copy()
-
-buurten_4326 = buurten.to_crs(4326)
-buurten_4326.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
+{
+  "type": "FeatureCollection",
+  "features": []
+}
