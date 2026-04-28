@@ -89,6 +89,24 @@ def detect_buurt_layer(gpkg_path: Path) -> str:
             return str(row["name"])
     return str(layers.iloc[0]["name"])
 
+def geocode_locatieserver(query: str) -> Point | None:
+    res = requests.get(
+        f"{LOC_BASE}/free",
+        params={"q": query, "fq": "type:adres", "rows": 1, "fl": "centroide_ll"},
+        timeout=30,
+    )
+    res.raise_for_status()
+    docs = res.json().get("response", {}).get("docs", [])
+    if not docs:
+        return None
+
+    ll = docs[0].get("centroide_ll")
+    if not ll:
+        return None
+
+    coords = ll.replace("POINT(", "").replace(")", "").split()
+    lon, lat = map(float, coords)
+    return Point(lon, lat)
 
 def normalize_buurten(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     rename = {}
@@ -240,6 +258,9 @@ def main() -> None:
     buurten = normalize_buurten(buurten)
     buurten = buurten[buurten["gemeentenaam"].astype(str).str.lower().eq("huizen")].copy()
 
+    buurten_4326 = buurten.to_crs(4326)
+    buurten_4326.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
+    
     kwb = cbs_table(cfg["cbs"]["kwb_table"])
     kwb = kwb[kwb["Gemeentenaam_1"].astype(str).str.lower().eq("huizen")].copy()
     kwb = kwb[kwb["SoortRegio_2"].astype(str).str.contains("buurt", case=False, na=False)].copy()
@@ -260,6 +281,8 @@ def main() -> None:
 
     candidates = p_le_2_public(bag.drop(columns="index_right", errors="ignore"), buurt_stats)
     candidates = split_analysis(candidates)
+    candidates_gdf = gpd.GeoDataFrame(candidates, geometry="geometry", crs="EPSG:4326")
+    candidates_gdf.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
     candidates.to_csv(out / "split_candidates_public.csv", index=False)
 
     by_buurt = (candidates.groupby("buurtcode", dropna=False)
@@ -269,11 +292,31 @@ def main() -> None:
     by_buurt.to_csv(out / "split_potential_buurt_public.csv", index=False)
 
     path_1200 = Path(cfg["paths"]["wimra_input_path"])
-    if path_1200.exists():
-        w1200 = parse_1200_list(path_1200, snapshot_date="2025-05-22")
-        w1200["aantal_mid"] = w1200["aantal_raw"].apply(count_mid)
-        w1200["status_bucket"] = w1200.apply(lambda r: status_bucket(r["status_raw"], r["afgerond_in_aanbouw"]), axis=1)
-        w1200.to_csv(out / "wimra_1200_list_normalized.csv", index=False)
+if path_1200.exists():
+    w1200 = parse_1200_list(path_1200, snapshot_date="2025-05-22")
+    w1200["aantal_mid"] = w1200["aantal_raw"].apply(count_mid)
+    w1200["status_bucket"] = w1200.apply(
+        lambda r: status_bucket(r["status_raw"], r["afgerond_in_aanbouw"]),
+        axis=1,
+    )
+    w1200.to_csv(out / "wimra_1200_list_normalized.csv", index=False)
+
+    # realisatie-samenvatting
+    realisatie = (
+        w1200.assign(woningaantal=w1200["aantal_mid"].fillna(0))
+        .groupby("status_bucket", dropna=False, as_index=False)["woningaantal"]
+        .sum()
+    )
+    realisatie.to_csv(out / "wimra_realisatiegraad_summary.csv", index=False)
+
+    # simpele geocodering op adresachtige locaties
+    w1200["zoekquery"] = (
+        w1200["locatie"].fillna("").astype(str).str.strip() + ", Huizen"
+    )
+    w1200["geometry"] = w1200["zoekquery"].apply(geocode_locatieserver)
+    projects_gdf = gpd.GeoDataFrame(w1200, geometry="geometry", crs="EPSG:4326")
+    projects_gdf = projects_gdf[projects_gdf["geometry"].notna()].copy()
+    projects_gdf.to_file(out / "wimra_1200_list_geocoded.geojson", driver="GeoJSON")
 
 
 if __name__ == "__main__":
