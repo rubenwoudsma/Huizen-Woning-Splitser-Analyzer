@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import folium
+from folium.plugins import MarkerCluster
 import geopandas as gpd
 import pandas as pd
 import plotly.express as px
@@ -40,37 +41,30 @@ def load_geojson(name: str):
 # -------------------------
 
 def main():
-    # -------------------------
     # HEADER
-    # -------------------------
     st.title("Huizen Woningsplitsing Analyzer")
 
     st.markdown(
         """
-        Deze tool geeft inzicht in het **potentieel voor woningsplitsing in de gemeente Huizen**.  
+        Deze tool geeft inzicht in het **potentieel voor woningsplitsing binnen de gemeente Huizen**.  
         Het doel is om beter te begrijpen waar binnen bestaande wijken extra woonruimte kan ontstaan.
 
         Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
         """
     )
 
-    # -------------------------
     # DATA
-    # -------------------------
     candidates = load_csv("split_candidates_public.csv")
     candidate_points = load_geojson("split_candidates_public.geojson")
     split_buurt = load_csv("split_potential_buurt_public.csv")
     buurten = load_geojson("buurten_huizen.geojson")
 
-    # -------------------------
     # FILTER
-    # -------------------------
     col_filter, col_map = st.columns([1, 3])
 
     with col_filter:
         min_m2 = st.slider("Minimale woninggrootte (m²)", 80, 250, 120, 5)
 
-    # filter toepassen
     if len(candidates):
         candidates = candidates[candidates["oppervlakte_m2"] >= min_m2]
 
@@ -79,15 +73,10 @@ def main():
             candidate_points["oppervlakte_m2"] >= min_m2
         ]
 
-    # -------------------------
     # KPI'S
-    # -------------------------
     k1, k2, k3 = st.columns(3)
 
-    k1.metric(
-        "Kandidaat-adressen",
-        int(len(candidates))
-    )
+    k1.metric("Kandidaat-adressen", int(len(candidates)))
 
     k2.metric(
         "Verwachte extra woningen",
@@ -108,24 +97,38 @@ def main():
         m = folium.Map(location=[52.299, 5.241], zoom_start=12, tiles="cartodbpositron")
 
         if len(buurten):
-            # merge data
-            if len(split_buurt):
-                merged = buurten.merge(split_buurt, on="buurtcode", how="left")
-                merged["expected_units_added"] = merged["expected_units_added"].fillna(0)
-            else:
-                merged = buurten.copy()
-                merged["expected_units_added"] = 0
+            merged = buurten.merge(split_buurt, on="buurtcode", how="left")
+            merged["expected_units_added"] = merged["expected_units_added"].fillna(0)
 
-            # CHOROPLETH (heatmap buurten)
+            # fallback voor naam
+            if "buurtnaam" not in merged.columns:
+                merged["buurtnaam"] = merged["buurtcode"]
+
+            # HEATMAP (choropleth)
+            min_val = merged["expected_units_added"].min()
+            max_val = merged["expected_units_added"].max()
+
+            if max_val > min_val:
+                thresholds = [
+                    min_val,
+                    min_val + (max_val - min_val) * 0.25,
+                    min_val + (max_val - min_val) * 0.5,
+                    min_val + (max_val - min_val) * 0.75,
+                    max_val,
+                ]
+            else:
+                thresholds = [0, 1]
+
             folium.Choropleth(
                 geo_data=merged,
                 data=merged,
                 columns=["buurtcode", "expected_units_added"],
                 key_on="feature.properties.buurtcode",
-                fill_color="RdYlGn_r",  # stoplicht kleuren
-                fill_opacity=0.7,
+                fill_color="RdYlGn_r",
+                fill_opacity=0.8,
                 line_opacity=0.2,
-                legend_name="Splitsingspotentieel (extra woningen)",
+                threshold_scale=thresholds,
+                legend_name="Splitsingspotentieel",
             ).add_to(m)
 
             # boundaries + tooltip
@@ -137,29 +140,43 @@ def main():
                     "weight": 0.5,
                 },
                 tooltip=folium.GeoJsonTooltip(
-                    fields=["buurtcode", "expected_units_added"],
+                    fields=["buurtnaam", "expected_units_added"],
                     aliases=["Buurt", "Potentieel woningen"],
                 ),
             ).add_to(m)
 
-        # punten (woningen)
+        # PUNTEN (met clustering + kleur)
         if len(candidate_points):
+            cluster = MarkerCluster().add_to(m)
+
             for _, r in candidate_points.iterrows():
                 kans = r.get("p_le_2", 0)
                 kans_pct = round(kans * 100, 1)
 
+                if kans > 0.7:
+                    kleur = "green"
+                elif kans > 0.5:
+                    kleur = "orange"
+                else:
+                    kleur = "red"
+
+                tooltip = folium.Tooltip(
+                    f"""
+                    Oppervlakte: {round(r.get('oppervlakte_m2', 0))} m²<br>
+                    Kans op ≤2 bewoners: {kans_pct}%<br>
+                    Indicatie splitsingspotentieel
+                    """,
+                    sticky=True,
+                )
+
                 folium.CircleMarker(
                     location=[r.geometry.y, r.geometry.x],
                     radius=4,
-                    color="blue",
+                    color=kleur,
                     fill=True,
-                    fill_opacity=0.6,
-                    tooltip=f"""
-                    Oppervlakte: {round(r.get('oppervlakte_m2', 0))} m²  
-                    Kans op ≤2 bewoners: {kans_pct}%  
-                    → Indicatie voor splitsingspotentieel
-                    """,
-                ).add_to(m)
+                    fill_opacity=0.7,
+                    tooltip=tooltip,
+                ).add_to(cluster)
 
         folium.LayerControl().add_to(m)
         st_folium(m, width=1100, height=650)
@@ -189,9 +206,7 @@ def main():
             )
             st.plotly_chart(fig, use_container_width=True)
 
-    # -------------------------
     # DOWNLOAD
-    # -------------------------
     if len(candidates):
         st.download_button(
             "Download dataset",
