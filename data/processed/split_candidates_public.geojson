@@ -1,0 +1,4 @@
+# na candidates = split_analysis(candidates)
+
+candidates_gdf = gpd.GeoDataFrame(candidates, geometry="geometry", crs="EPSG:4326")
+candidates_gdf.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
