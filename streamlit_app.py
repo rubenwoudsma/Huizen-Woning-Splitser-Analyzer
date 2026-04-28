@@ -39,13 +39,15 @@ def load_csv(name: str) -> pd.DataFrame:
 
 
 @st.cache_data
-def load_geojson(name: str) -> gpd.GeoDataFrame:
+def load_geojson(name: str):
     path = PROCESSED / name
     if not path.exists():
+        st.warning(f"{name} ontbreekt")
         return gpd.GeoDataFrame()
     try:
         return gpd.read_file(path)
-    except Exception:
+    except Exception as e:
+        st.error(f"Fout bij laden {name}: {e}")
         return gpd.GeoDataFrame()
 
 st.write("Files in data/processed:", list(PROCESSED.glob("*")))
