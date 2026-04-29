@@ -170,18 +170,35 @@ def split_analysis(
 # KLIMAAT DATA
 # -------------------------
 
-def load_heatstress(path: Path):
+def load_heatstress(path: Path) -> pd.DataFrame:
     df = pd.read_excel(path)
-    df.columns = [c.lower().strip() for c in df.columns]
 
-    rename_map = {}
+    # kolomnamen opschonen
+    df.columns = [str(c).lower().strip() for c in df.columns]
+
+    print("🔍 Kolommen in klimaatexcel:", df.columns.tolist())
+
+    buurt_col = None
+    hitte_col = None
+
+    # 🔥 buurtcode zoeken
     for col in df.columns:
-        if "buurtcode" in col:
-            rename_map[col] = "buurtcode"
-        elif "gevoel" in col:
-            rename_map[col] = "hittestress"
+        if "buurtcode" in col or "bu_code" in col:
+            buurt_col = col
 
-    df = df.rename(columns=rename_map)
+    # 🔥 hittestress zoeken (flexibel!)
+    for col in df.columns:
+        if "gevoel" in col or "temperatuur" in col:
+            hitte_col = col
+
+    if buurt_col is None or hitte_col is None:
+        print("⚠️ Kon juiste kolommen niet vinden in klimaatexcel")
+        return pd.DataFrame(columns=["buurtcode", "hittestress"])
+
+    df = df.rename(columns={
+        buurt_col: "buurtcode",
+        hitte_col: "hittestress"
+    })
 
     return df[["buurtcode", "hittestress"]]
 
