@@ -39,12 +39,18 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
     print("Lees CBS buurten...")
     gdf = gpd.read_file(gpkg_path, layer="buurten")
 
-    # kolommen normaliseren
     gdf.columns = [c.lower() for c in gdf.columns]
 
-    # filter Huizen
+    # robuuste gemeentenaam detectie
     if "gm_naam" in gdf.columns:
-        gdf = gdf[gdf["gm_naam"].str.lower() == "huizen"]
+        gdf["gemeente"] = gdf["gm_naam"]
+    elif "gemeentenaam" in gdf.columns:
+        gdf["gemeente"] = gdf["gemeentenaam"]
+    else:
+        raise ValueError("Geen gemeentenaam kolom gevonden")
+
+    # filter alleen Huizen
+    gdf = gdf[gdf["gemeente"].str.lower().str.strip() == "huizen"]
 
     # kolommen fixen
     if "bu_code" in gdf.columns:
@@ -55,10 +61,10 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 
     gdf = gdf.to_crs(4326)
 
-    # 🔥 BELANGRIJK: dataset verkleinen
+    # alleen relevante kolommen
     gdf = gdf[["buurtcode", "buurtnaam", "geometry"]]
 
-    # 🔥 geometrie vereenvoudigen (cruciaal!)
+    # geometrie vereenvoudigen (BELANGRIJK!)
     gdf["geometry"] = gdf["geometry"].simplify(
         tolerance=0.0005,
         preserve_topology=True
@@ -110,7 +116,6 @@ def get_bag_huizen(bbox):
 
     gdf["oppervlakte_m2"] = pd.to_numeric(gdf["oppervlakte"], errors="coerce")
 
-    # kolommen beperken
     gdf = gdf[["geometry", "oppervlakte_m2"]]
 
     return gdf
@@ -182,7 +187,7 @@ def main():
     bbox = get_huizen_bbox()
     houses = get_bag_huizen(bbox)
 
-    print(f"BAG woningen: {len(houses)}")
+    print(f"BAG woningen totaal: {len(houses)}")
 
     # 3. spatial join
     houses = gpd.sjoin(
@@ -191,6 +196,11 @@ def main():
         how="left",
         predicate="within"
     )
+
+    # 🔥 CRUCIALE FILTER
+    houses = houses[houses["buurtcode"].notna()]
+
+    print(f"Na filter (alleen Huizen): {len(houses)}")
 
     # 4. model
     houses = add_probability_model(houses)
