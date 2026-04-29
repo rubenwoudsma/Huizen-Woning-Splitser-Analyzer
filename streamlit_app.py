@@ -39,6 +39,20 @@ def ensure_buurtcode(df):
     return df
 
 
+def clean_gdf_for_join(gdf):
+    """Verwijder probleemkolommen voor spatial joins"""
+    if gdf is None or len(gdf) == 0:
+        return gdf
+
+    gdf = gdf.copy()
+
+    for col in ["index_left", "index_right"]:
+        if col in gdf.columns:
+            gdf = gdf.drop(columns=[col])
+
+    return gdf
+
+
 @st.cache_data
 def load_csv(name: str) -> pd.DataFrame:
     path = PROCESSED / name
@@ -46,8 +60,7 @@ def load_csv(name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        df = pd.read_csv(path)
-        return safe_lower(df)
+        return safe_lower(pd.read_csv(path))
     except Exception:
         return pd.DataFrame()
 
@@ -59,8 +72,7 @@ def load_geojson(name: str):
         return gpd.GeoDataFrame()
 
     try:
-        gdf = gpd.read_file(path)
-        return safe_lower(gdf)
+        return safe_lower(gpd.read_file(path))
     except Exception:
         return gpd.GeoDataFrame()
 
@@ -75,18 +87,20 @@ def main():
 
     st.markdown(
         """
-        Deze tool geeft inzicht in het **splitsingspotentieel binnen de bestaande woningvoorraad**  
-        en zet dit af tegen de geplande woningbouw in Huizen.
+        Deze tool geeft inzicht in het **splitsingspotentieel van bestaande woningen**  
+        en zet dit af tegen geplande woningbouw in de gemeente Huizen.
 
         Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
         """
     )
 
     st.info(
-        "Dit model is indicatief en bedoeld voor beleidsverkenning, niet als exacte voorspelling."
+        "Deze analyse is indicatief en bedoeld om beleidskeuzes te ondersteunen, niet om exacte aantallen te voorspellen."
     )
 
+    # -------------------------
     # DATA
+    # -------------------------
     candidates = load_csv("split_candidates_public.csv")
     candidate_points = load_geojson("split_candidates_public.geojson")
     split_buurt = load_csv("split_potential_buurt_public.csv")
@@ -105,7 +119,7 @@ def main():
         min_m2 = st.slider("Minimale woninggrootte (m²)", 80, 250, 120, 5)
         adoptie = st.slider("Adoptie splitsing (%)", 1, 30, 10)
 
-    # filter
+    # filter kandidaten
     if len(candidates):
         candidates = candidates[candidates["oppervlakte_m2"] >= min_m2]
 
@@ -139,7 +153,6 @@ def main():
         if len(split_buurt) else 0
     )
 
-    # extra KPI
     if len(projects):
         totaal_projecten = pd.to_numeric(projects.get("aantal"), errors="coerce").sum()
 
@@ -242,24 +255,32 @@ def main():
     if len(projects) and len(buurten):
         st.subheader("Analyse: projecten vs splitsingspotentieel")
 
-        projects_join = gpd.sjoin(
-            projects,
-            buurten[["buurtcode", "geometry"]],
-            how="left",
-            predicate="within"
-        )
+        try:
+            projects_clean = clean_gdf_for_join(projects)
+            buurten_clean = clean_gdf_for_join(buurten)
 
-        projects_analysis = projects_join.merge(
-            split_buurt,
-            on="buurtcode",
-            how="left"
-        )
+            projects_join = gpd.sjoin(
+                projects_clean,
+                buurten_clean[["buurtcode", "geometry"]],
+                how="left",
+                predicate="within"
+            )
 
-        st.dataframe(
-            projects_analysis[
-                ["benaming", "buurtcode", "expected_units_added"]
-            ].sort_values("expected_units_added", ascending=False)
-        )
+            projects_analysis = projects_join.merge(
+                split_buurt,
+                on="buurtcode",
+                how="left"
+            )
+
+            st.dataframe(
+                projects_analysis[
+                    ["benaming", "buurtcode", "expected_units_added"]
+                ].sort_values("expected_units_added", ascending=False)
+            )
+
+        except Exception as e:
+            st.warning("Overlap analyse kon niet worden uitgevoerd.")
+            st.write(e)
 
     # -------------------------
     # GRAFIEKEN
