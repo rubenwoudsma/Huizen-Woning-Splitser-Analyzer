@@ -27,14 +27,6 @@ def load_geo(name):
     return gpd.read_file(path) if path.exists() else gpd.GeoDataFrame()
 
 
-def clean_for_join(gdf):
-    gdf = gdf.copy()
-    for col in ["index_left", "index_right"]:
-        if col in gdf.columns:
-            gdf = gdf.drop(columns=[col])
-    return gdf
-
-
 @st.cache_data
 def calculate_candidates(df, min_m2, adoptie):
     if len(df) == 0:
@@ -182,53 +174,60 @@ if len(projects):
 
 st_folium(m, use_container_width=True, height=750, returned_objects=[])
 
-st.caption(
-    "Let op: bij in- en uitzoomen kan de kaart kort verversen."
-)
+st.caption("Let op: bij in- en uitzoomen kan de kaart kort verversen.")
 
 # -------------------------
-# OVERLAP ANALYSE (FIXED)
+# ANALYSE
 # -------------------------
 st.subheader("Analyse: projecten vs splitsingspotentieel")
 
 if len(projects) and len(split_buurt):
 
-    try:
-        analyse = projects.merge(
-            split_buurt,
-            on="buurtcode",
-            how="left"
-        )
-        
-        analyse = analyse.rename(columns={
-            "buurtnaam": "Buurt",
-            "expected_units_added": "Potentieel (woningen)"
-        })
-        
-        analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].fillna(0)
-        
-        # 🔥 projectgrootte numeriek maken
-        analyse["Projectgrootte"] = pd.to_numeric(analyse["aantal"], errors="coerce")
-        
-        # 🔥 verhouding berekenen
-        analyse["Verhouding"] = (
-            analyse["Projectgrootte"] /
-            analyse["Potentieel (woningen)"]
-        )
-        
-        # afronden
-        analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
-        analyse["Verhouding"] = analyse["Verhouding"].round(2)
-        
-        st.dataframe(
-            analyse[
-                ["benaming", "Buurt", "Projectgrootte", "Potentieel (woningen)", "Verhouding"]
-            ].sort_values("Verhouding", ascending=False)
-        )
+    analyse = projects.merge(split_buurt, on="buurtcode", how="left")
 
-    except Exception as e:
-        st.warning("Analyse kon niet worden uitgevoerd")
-        st.write(e)
+    analyse["Projectgrootte"] = pd.to_numeric(analyse["aantal"], errors="coerce")
+    analyse["Potentieel (woningen)"] = analyse["expected_units_added"].fillna(0)
+
+    analyse["Verhouding"] = (
+        analyse["Projectgrootte"] /
+        analyse["Potentieel (woningen)"]
+    )
+
+    # -------------------------
+    # CATEGORIE
+    # -------------------------
+    def categoriseer(row):
+        if pd.isna(row["Verhouding"]):
+            return "Onbekend"
+        elif row["Verhouding"] > 1:
+            return "Overbelast"
+        elif row["Verhouding"] < 0.5:
+            return "Onderbenut"
+        else:
+            return "In balans"
+
+    analyse["Categorie"] = analyse.apply(categoriseer, axis=1)
+
+    analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
+    analyse["Verhouding"] = analyse["Verhouding"].round(2)
+
+    # kleur styling
+    def kleur(val):
+        if val == "Overbelast":
+            return "background-color: #ffcccc"
+        elif val == "Onderbenut":
+            return "background-color: #ccffcc"
+        elif val == "In balans":
+            return "background-color: #fff2cc"
+        return ""
+
+    st.dataframe(
+        analyse[
+            ["benaming", "buurtnaam", "Projectgrootte", "Potentieel (woningen)", "Verhouding", "Categorie"]
+        ]
+        .rename(columns={"buurtnaam": "Buurt"})
+        .style.applymap(kleur, subset=["Categorie"])
+    )
 
 # -------------------------
 # GRAFIEKEN
