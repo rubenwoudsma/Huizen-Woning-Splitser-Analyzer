@@ -16,7 +16,7 @@ st.set_page_config(page_title="Huizen Woningsplitsing Analyzer", layout="wide")
 
 
 # -------------------------
-# HELPERS (DATA SAFE)
+# HELPERS
 # -------------------------
 
 def safe_lower(df):
@@ -60,8 +60,7 @@ def load_geojson(name: str):
 
     try:
         gdf = gpd.read_file(path)
-        gdf = safe_lower(gdf)
-        return gdf
+        return safe_lower(gdf)
     except Exception:
         return gpd.GeoDataFrame()
 
@@ -77,10 +76,15 @@ def main():
     st.markdown(
         """
         Deze tool geeft inzicht in het **potentieel voor woningsplitsing in de gemeente Huizen**.  
-        Hiermee ontstaat inzicht waar extra woningen gerealiseerd kunnen worden binnen bestaande wijken.
+        Het doel is om beter te begrijpen waar binnen bestaande wijken extra woonruimte kan ontstaan.
 
         Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
         """
+    )
+
+    st.info(
+        "Dit model is indicatief. De resultaten geven richting voor beleid en analyse, "
+        "maar zijn geen exacte voorspellingen."
     )
 
     # DATA
@@ -89,15 +93,8 @@ def main():
     split_buurt = load_csv("split_potential_buurt_public.csv")
     buurten = load_geojson("buurten_huizen.geojson")
 
-    # kolommen fixen
     buurten = ensure_buurtcode(buurten)
     split_buurt = ensure_buurtcode(split_buurt)
-
-    # DEBUG (tijdelijk handig)
-    if st.checkbox("Toon debug info"):
-        st.write("Buurten kolommen:", buurten.columns)
-        st.write("Split buurt kolommen:", split_buurt.columns)
-        st.write("Candidates kolommen:", candidates.columns)
 
     # FILTER
     col_filter, col_map = st.columns([1, 3])
@@ -135,9 +132,8 @@ def main():
     with col_map:
         m = folium.Map(location=[52.299, 5.241], zoom_start=12, tiles="cartodbpositron")
 
-        # BUURTEN (HEATMAP)
-        if len(buurten) and "buurtcode" in buurten.columns:
-            if len(split_buurt) and "buurtcode" in split_buurt.columns:
+        if len(buurten):
+            if len(split_buurt):
                 merged = buurten.merge(split_buurt, on="buurtcode", how="left")
             else:
                 merged = buurten.copy()
@@ -145,10 +141,14 @@ def main():
             merged["expected_units_added"] = merged.get("expected_units_added", 0)
             merged["expected_units_added"] = merged["expected_units_added"].fillna(0)
 
-            # fallback naam
+            # buurtnamen fix
             if "buurtnaam" not in merged.columns:
                 merged["buurtnaam"] = merged["buurtcode"]
 
+            # percentage toevoegen
+            merged["potentieel_pct"] = (merged["expected_units_added"] * 100).round(2)
+
+            # heatmap
             min_val = merged["expected_units_added"].min()
             max_val = merged["expected_units_added"].max()
 
@@ -183,12 +183,12 @@ def main():
                     "weight": 0.5,
                 },
                 tooltip=folium.GeoJsonTooltip(
-                    fields=["buurtnaam", "expected_units_added"],
-                    aliases=["Buurt", "Potentieel"],
+                    fields=["buurtnaam", "potentieel_pct"],
+                    aliases=["Buurt", "Potentieel (%)"],
                 ),
             ).add_to(m)
 
-        # PUNTEN
+        # woningen (punten)
         if len(candidate_points):
             cluster = MarkerCluster().add_to(m)
 
@@ -205,9 +205,11 @@ def main():
 
                 tooltip = folium.Tooltip(
                     f"""
+                    <b>Woning</b><br>
                     Oppervlakte: {round(r.get('oppervlakte_m2', 0))} m²<br>
-                    Kans op ≤2 bewoners: {kans_pct}%<br>
-                    Indicatie splitsingspotentieel
+                    Kans op kleine huishoudens (≤2 pers): {kans_pct}%<br>
+                    <br>
+                    <i>Hoe hoger deze kans, hoe groter de kans dat deze woning geschikt is voor splitsing</i>
                     """,
                     sticky=True,
                 )
@@ -231,21 +233,27 @@ def main():
 
     with c1:
         if len(split_buurt):
+            split_named = split_buurt.merge(
+                buurten[["buurtcode", "buurtnaam"]],
+                on="buurtcode",
+                how="left"
+            )
+
             fig = px.bar(
-                split_buurt.sort_values("expected_units_added", ascending=False).head(10),
-                x="buurtcode",
+                split_named.sort_values("expected_units_added", ascending=False).head(10),
+                x="buurtnaam",
                 y="expected_units_added",
-                title="Top buurten",
+                title="Top buurten (splitsingspotentieel)",
             )
             st.plotly_chart(fig, use_container_width=True)
 
     with c2:
         if len(candidates):
-            fig = px.histogram(
+            fig = px.scatter(
                 candidates,
                 x="oppervlakte_m2",
-                nbins=20,
-                title="Verdeling woninggrootte",
+                y="expected_units_added",
+                title="Relatie woninggrootte vs splitsingspotentieel",
             )
             st.plotly_chart(fig, use_container_width=True)
 
