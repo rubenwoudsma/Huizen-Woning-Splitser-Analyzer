@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import math
-import random
 import zipfile
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
 import requests
-from shapely.geometry import Point
+
+# -------------------------
+# CONSTANTEN
+# -------------------------
 
 CBS_URL = "https://geodata.cbs.nl/files/Wijkenbuurtkaart/WijkBuurtkaart_2024_v2.zip"
+BAG_URL = "https://api.pdok.nl/kadaster/bag/ogc/v2/collections/verblijfsobject/items"
 
 
 # -------------------------
-# CBS BUURTEN LADEN
+# CBS BUURTEN
 # -------------------------
 
 def load_cbs_buurten() -> gpd.GeoDataFrame:
@@ -32,71 +35,83 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 
     gpkg_path = zip_path.parent / gpkg
 
-    # 🔥 FIX: juiste layer kiezen
     gdf = gpd.read_file(gpkg_path, layer="buurten")
-
-    # kolommen normaliseren
     gdf.columns = [c.lower() for c in gdf.columns]
 
-    # 🔥 robuust filteren (kolomnaam verschilt soms)
+    # filter Huizen
     if "gm_naam" in gdf.columns:
         gdf = gdf[gdf["gm_naam"].str.lower() == "huizen"]
-    elif "gemeentenaam" in gdf.columns:
-        gdf = gdf[gdf["gemeentenaam"].str.lower() == "huizen"]
-    else:
-        raise ValueError("Geen gemeentenaam kolom gevonden in CBS data")
 
-    gdf = gdf.to_crs(4326)
-
-    # kolom naam fix
+    # kolommen fix
     if "bu_code" in gdf.columns:
-        gdf.rename(columns={"bu_code": "buurtcode"}, inplace=True)
-    elif "buurtcode" not in gdf.columns:
-        raise ValueError("Geen buurtcode kolom gevonden")
+        gdf = gdf.rename(columns={"bu_code": "buurtcode"})
+
+    if "bu_naam" in gdf.columns:
+        gdf = gdf.rename(columns={"bu_naam": "buurtnaam"})
+
+    return gdf.to_crs(4326)
+
+
+# -------------------------
+# BAG DATA
+# -------------------------
+
+def get_huizen_bbox():
+    # bounding box Huizen
+    return [5.15, 52.25, 5.35, 52.35]
+
+
+def get_bag_huizen(bbox):
+    params = {
+        "bbox": ",".join(map(str, bbox)),
+        "limit": 1000,
+        "f": "json"
+    }
+
+    url = BAG_URL
+    features = []
+
+    while url:
+        r = requests.get(url, params=params if "?" not in url else None, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+
+        features.extend(data["features"])
+
+        next_link = None
+        for link in data["links"]:
+            if link["rel"] == "next":
+                next_link = link["href"]
+
+        url = next_link
+        params = None
+
+    gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
+
+    # filter woningen
+    if "gebruiksdoelen" in gdf.columns:
+        gdf = gdf[gdf["gebruiksdoelen"].astype(str).str.contains("woon", case=False)]
+
+    # oppervlakte
+    gdf["oppervlakte_m2"] = pd.to_numeric(gdf["oppervlakte"], errors="coerce")
 
     return gdf
 
 
 # -------------------------
-# FAKE HOUSES
+# MODEL
 # -------------------------
 
-def generate_fake_houses(buurten: gpd.GeoDataFrame, n=200) -> gpd.GeoDataFrame:
-    points = []
-    buurtcodes = []
+def add_probability_model(df):
+    df = df.copy()
 
-    for _ in range(n):
-        row = buurten.sample(1).iloc[0]
-        poly = row.geometry
+    # simpele proxy: grotere woningen → meer kans op splitsing
+    df["p_le_2"] = (
+        0.3 + 0.002 * (df["oppervlakte_m2"] - 80)
+    ).clip(0.2, 0.9)
 
-        if poly is None or poly.is_empty:
-            continue
+    return df
 
-        minx, miny, maxx, maxy = poly.bounds
-
-        for _ in range(10):
-            p = Point(
-                random.uniform(minx, maxx),
-                random.uniform(miny, maxy)
-            )
-            if poly.contains(p):
-                points.append(p)
-                buurtcodes.append(row["buurtcode"])
-                break
-
-    df = pd.DataFrame({
-        "adres_id": [f"a{i}" for i in range(len(points))],
-        "oppervlakte_m2": [random.randint(80, 220) for _ in points],
-        "p_le_2": [random.uniform(0.4, 0.9) for _ in points],
-        "buurtcode": buurtcodes
-    })
-
-    return gpd.GeoDataFrame(df, geometry=points, crs="EPSG:4326")
-
-
-# -------------------------
-# SPLIT ANALYSIS
-# -------------------------
 
 def split_analysis(
     df: pd.DataFrame,
@@ -118,7 +133,6 @@ def split_analysis(
 
     df["split_feasible"] = df["max_units_after_split"] >= 2
 
-    # 🔥 belangrijk voor test
     df["units_added_if_split"] = df["max_units_after_split"] - 1
 
     if "p_le_2" not in df.columns:
@@ -141,21 +155,33 @@ def main():
     out = Path("data/processed")
     out.mkdir(parents=True, exist_ok=True)
 
-    # buurten
+    # 1. CBS buurten
     buurten = load_cbs_buurten()
     buurten.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
 
     print(f"Buurten geladen: {len(buurten)}")
 
-    # fake huizen
-    houses = generate_fake_houses(buurten, n=300)
+    # 2. BAG woningen
+    bbox = get_huizen_bbox()
+    houses = get_bag_huizen(bbox)
 
-    print(f"Houses: {len(houses)}")
+    print(f"BAG woningen: {len(houses)}")
 
-    # analyse
+    # 3. koppel aan buurten
+    houses = gpd.sjoin(
+        houses,
+        buurten[["buurtcode", "geometry"]],
+        how="left",
+        predicate="within"
+    )
+
+    # 4. model
+    houses = add_probability_model(houses)
+
+    # 5. analyse
     candidates = split_analysis(houses)
 
-    # save
+    # 6. save
     candidates.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
     candidates.drop(columns="geometry").to_csv(
         out / "split_candidates_public.csv", index=False
