@@ -194,26 +194,36 @@ st.subheader("Analyse: projecten vs splitsingspotentieel")
 if len(projects) and len(split_buurt):
 
     try:
-        # 🔥 GEEN spatial join meer nodig!
         analyse = projects.merge(
             split_buurt,
             on="buurtcode",
             how="left"
         )
-
+        
         analyse = analyse.rename(columns={
             "buurtnaam": "Buurt",
             "expected_units_added": "Potentieel (woningen)"
         })
-
+        
         analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].fillna(0)
-
-        # netjes afronden
+        
+        # 🔥 projectgrootte numeriek maken
+        analyse["Projectgrootte"] = pd.to_numeric(analyse["aantal"], errors="coerce")
+        
+        # 🔥 verhouding berekenen
+        analyse["Verhouding"] = (
+            analyse["Projectgrootte"] /
+            analyse["Potentieel (woningen)"]
+        )
+        
+        # afronden
         analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
-
+        analyse["Verhouding"] = analyse["Verhouding"].round(2)
+        
         st.dataframe(
-            analyse[["benaming", "Buurt", "Potentieel (woningen)"]]
-            .sort_values("Potentieel (woningen)", ascending=False)
+            analyse[
+                ["benaming", "Buurt", "Projectgrootte", "Potentieel (woningen)", "Verhouding"]
+            ].sort_values("Verhouding", ascending=False)
         )
 
     except Exception as e:
