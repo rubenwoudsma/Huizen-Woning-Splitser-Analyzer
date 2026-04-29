@@ -7,6 +7,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import requests
+from shapely.geometry import Point
 
 # -------------------------
 # CONSTANTEN
@@ -49,22 +50,20 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
     else:
         raise ValueError("Geen gemeentenaam kolom gevonden")
 
-    # filter alleen Huizen
     gdf = gdf[gdf["gemeente"].str.lower().str.strip() == "huizen"]
 
     # kolommen fixen
     if "bu_code" in gdf.columns:
         gdf = gdf.rename(columns={"bu_code": "buurtcode"})
-
     if "bu_naam" in gdf.columns:
         gdf = gdf.rename(columns={"bu_naam": "buurtnaam"})
 
     gdf = gdf.to_crs(4326)
 
-    # alleen relevante kolommen
+    # alleen benodigde kolommen
     gdf = gdf[["buurtcode", "buurtnaam", "geometry"]]
 
-    # geometrie vereenvoudigen (BELANGRIJK!)
+    # geometrie vereenvoudigen (belangrijk voor GitHub)
     gdf["geometry"] = gdf["geometry"].simplify(
         tolerance=0.0005,
         preserve_topology=True
@@ -110,15 +109,12 @@ def get_bag_huizen(bbox):
 
     gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
 
-    # alleen woningen
     if "gebruiksdoelen" in gdf.columns:
         gdf = gdf[gdf["gebruiksdoelen"].astype(str).str.contains("woon", case=False)]
 
     gdf["oppervlakte_m2"] = pd.to_numeric(gdf["oppervlakte"], errors="coerce")
 
-    gdf = gdf[["geometry", "oppervlakte_m2"]]
-
-    return gdf
+    return gdf[["geometry", "oppervlakte_m2"]]
 
 
 # -------------------------
@@ -135,36 +131,69 @@ def add_probability_model(df):
     return df
 
 
-def split_analysis(
-    df: pd.DataFrame,
-    min_total_m2: float = 120,
-    min_unit_m2: float = 50,
-    net_efficiency: float = 0.9,
-    adoption_rate: float = 0.10,
-) -> pd.DataFrame:
-
+def split_analysis(df):
     df = df.copy()
 
-    df = df[df["oppervlakte_m2"] >= min_total_m2]
+    df = df[df["oppervlakte_m2"] >= 120]
 
-    df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * net_efficiency
+    df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * 0.9
 
     df["max_units_after_split"] = (
-        df["netto_splitsbaar_m2"] / min_unit_m2
+        df["netto_splitsbaar_m2"] / 50
     ).apply(math.floor).clip(upper=2)
-
-    df["split_feasible"] = df["max_units_after_split"] >= 2
 
     df["units_added_if_split"] = df["max_units_after_split"] - 1
 
-    if "p_le_2" not in df.columns:
-        df["p_le_2"] = 0.6
-
-    df["expected_units_added"] = (
-        df["units_added_if_split"] * df["p_le_2"] * adoption_rate
-    )
+    df["expected_units_added"] = df["units_added_if_split"] * df["p_le_2"] * 0.10
 
     return df
+
+
+# -------------------------
+# 1.200 LIJST
+# -------------------------
+
+def load_1200_list(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+
+    df.columns = [c.lower().strip() for c in df.columns]
+
+    rename_map = {}
+
+    for col in df.columns:
+        if "naam" in col or "benaming" in col:
+            rename_map[col] = "benaming"
+        elif "locatie" in col or "adres" in col:
+            rename_map[col] = "locatie"
+        elif "aantal" in col:
+            rename_map[col] = "aantal"
+        elif "status" in col:
+            rename_map[col] = "status"
+
+    return df.rename(columns=rename_map)
+
+
+def geocode_locatieserver(query: str):
+    url = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free"
+
+    try:
+        r = requests.get(url, params={"q": query, "rows": 1, "fl": "centroide_ll"}, timeout=30)
+        r.raise_for_status()
+
+        docs = r.json().get("response", {}).get("docs", [])
+
+        if not docs:
+            return None
+
+        ll = docs[0].get("centroide_ll")
+        if not ll:
+            return None
+
+        lon, lat = map(float, ll.replace("POINT(", "").replace(")", "").split())
+        return Point(lon, lat)
+
+    except Exception:
+        return None
 
 
 # -------------------------
@@ -177,19 +206,15 @@ def main():
     out = Path("data/processed")
     out.mkdir(parents=True, exist_ok=True)
 
-    # 1. buurten
+    # CBS buurten
     buurten = load_cbs_buurten()
     buurten.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
 
-    print(f"Buurten geladen: {len(buurten)}")
+    print(f"Buurten: {len(buurten)}")
 
-    # 2. BAG woningen
-    bbox = get_huizen_bbox()
-    houses = get_bag_huizen(bbox)
+    # BAG woningen
+    houses = get_bag_huizen(get_huizen_bbox())
 
-    print(f"BAG woningen totaal: {len(houses)}")
-
-    # 3. spatial join
     houses = gpd.sjoin(
         houses,
         buurten[["buurtcode", "geometry"]],
@@ -197,24 +222,18 @@ def main():
         predicate="within"
     )
 
-    # 🔥 CRUCIALE FILTER
+    # filter alleen Huizen
     houses = houses[houses["buurtcode"].notna()]
 
-    print(f"Na filter (alleen Huizen): {len(houses)}")
+    print(f"Woningen in Huizen: {len(houses)}")
 
-    # 4. model
     houses = add_probability_model(houses)
 
-    # 5. analyse
     candidates = split_analysis(houses)
 
-    # 6. output
+    # output
     candidates.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
-
-    candidates.drop(columns="geometry").to_csv(
-        out / "split_candidates_public.csv",
-        index=False
-    )
+    candidates.drop(columns="geometry").to_csv(out / "split_candidates_public.csv", index=False)
 
     by_buurt = (
         candidates.groupby("buurtcode", as_index=False)["expected_units_added"]
@@ -222,6 +241,24 @@ def main():
     )
 
     by_buurt.to_csv(out / "split_potential_buurt_public.csv", index=False)
+
+    # 1.200 lijst
+    path_1200 = Path("data/raw/1-200-lijst-in-excel.csv")
+
+    if path_1200.exists():
+        df_1200 = load_1200_list(path_1200)
+
+        df_1200["zoekquery"] = df_1200["locatie"].astype(str) + ", Huizen"
+
+        df_1200["geometry"] = df_1200["zoekquery"].apply(geocode_locatieserver)
+
+        gdf_1200 = gpd.GeoDataFrame(df_1200, geometry="geometry", crs="EPSG:4326")
+
+        gdf_1200 = gdf_1200[gdf_1200["geometry"].notna()]
+
+        gdf_1200.to_file(out / "wimra_1200_list.geojson", driver="GeoJSON")
+
+        print(f"Projecten geocodeerd: {len(gdf_1200)}")
 
     print("Pipeline klaar")
 
