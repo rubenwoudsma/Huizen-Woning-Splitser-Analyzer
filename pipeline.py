@@ -151,19 +151,41 @@ def split_analysis(
 # -------------------------
 
 def load_1200_list(path: Path) -> pd.DataFrame:
+
+    # 🔥 Excel eerst proberen (jij gebruikt .xlsx)
     try:
-        df = pd.read_csv(path)
-    except:
+        df = pd.read_excel(path)
+    except Exception:
         try:
-            df = pd.read_csv(path, sep=";")
-        except:
-            df = pd.read_excel(path)
+            df = pd.read_csv(path, sep=None, engine="python")
+        except Exception:
+            df = pd.read_csv(path, sep=";", engine="python")
 
-    df.columns = [c.lower().strip() for c in df.columns]
+    # kolomnamen opschonen
+    df.columns = [str(c).lower().strip() for c in df.columns]
 
-    # totaalregels verwijderen
-    if "locatie" in df.columns:
-        df = df[~df["locatie"].str.lower().str.contains("totaal", na=False)]
+    # 🔥 mapping naar standaard kolommen
+    rename_map = {}
+
+    for col in df.columns:
+        if "naam" in col or "benaming" in col:
+            rename_map[col] = "benaming"
+        elif "locatie" in col or "adres" in col:
+            rename_map[col] = "locatie"
+        elif "aantal" in col:
+            rename_map[col] = "aantal"
+        elif "status" in col:
+            rename_map[col] = "status"
+
+    df = df.rename(columns=rename_map)
+
+    # 🔥 alleen relevante kolommen behouden
+    keep_cols = ["benaming", "locatie", "aantal", "status"]
+    df = df[[c for c in keep_cols if c in df.columns]]
+
+    # 🔥 opschonen
+    df = df[df["locatie"].notna()]
+    df = df[~df["locatie"].str.lower().str.contains("totaal", na=False)]
 
     return df
 
@@ -230,11 +252,13 @@ def main():
         gdf = gdf[gdf["geometry"].notna()]
 
         gdf = gpd.sjoin(gdf, buurten, predicate="within")
-
+        
+        # 🔥 CRUCIALE STAP: alleen projecten binnen Huizen behouden
+        gdf = gdf[gdf["buurtcode"].notna()]
+        
         gdf.to_file(out / "wimra_1200_list.geojson")
-
+        
     print("Pipeline klaar")
-
 
 if __name__ == "__main__":
     main()
