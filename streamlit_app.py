@@ -220,30 +220,45 @@ if len(projects) and len(split_buurt):
 colA, colB = st.columns(2)
 
 with colA:
-    if len(split_buurt):
-        split_named = split_buurt.merge(
+    if len(split_buurt) and len(projects):
+    
+        projecten_per_buurt = projects.groupby("buurtcode")["aantal"].apply(
+            lambda x: pd.to_numeric(x, errors="coerce").sum()
+        ).reset_index()
+    
+        vergelijking = split_buurt.merge(
+            projecten_per_buurt,
+            on="buurtcode",
+            how="left"
+        )
+    
+        vergelijking["aantal"] = vergelijking["aantal"].fillna(0)
+    
+        vergelijking = vergelijking.merge(
             buurten[["buurtcode", "buurtnaam"]],
             on="buurtcode",
             how="left"
         )
-
+    
         fig = px.bar(
-            split_named.sort_values("expected_units_added", ascending=False).head(10),
+            vergelijking.sort_values("expected_units_added", ascending=False).head(10),
             x="buurtnaam",
-            y="expected_units_added",
-            title="Top buurten"
+            y=["expected_units_added", "aantal"],
+            barmode="group",
+            title="Potentieel vs geplande woningen per buurt",
+            labels={
+                "value": "Aantal woningen",
+                "variable": "Type"
+            }
         )
+    
         st.plotly_chart(fig, use_container_width=True)
 
 with colB:
-    if len(candidates):
-        filtered = candidates[candidates["oppervlakte_m2"] < 500]
-
-        fig = px.scatter(
-            filtered,
-            x="oppervlakte_m2",
-            y="p_le_2",
-            opacity=0.4,
-            title="Woninggrootte vs kans"
+        fig = px.pie(
+            analyse,
+            names="Categorie",
+            title="Verdeling projecten over categorieën"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        
+        st.plotly_chart(fig)
