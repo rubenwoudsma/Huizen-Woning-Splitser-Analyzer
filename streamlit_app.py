@@ -221,29 +221,49 @@ colA, colB = st.columns(2)
 
 with colA:
     if len(split_buurt) and len(projects):
-    
+
+        # projecten optellen per buurt
         projecten_per_buurt = projects.groupby("buurtcode")["aantal"].apply(
             lambda x: pd.to_numeric(x, errors="coerce").sum()
         ).reset_index()
-    
+
         vergelijking = split_buurt.merge(
             projecten_per_buurt,
             on="buurtcode",
             how="left"
         )
-    
+
         vergelijking["aantal"] = vergelijking["aantal"].fillna(0)
-    
+
         vergelijking = vergelijking.merge(
             buurten[["buurtcode", "buurtnaam"]],
             on="buurtcode",
             how="left"
         )
-    
+
+        # 🔥 HERNOEMEN (BELANGRIJK)
+        vergelijking = vergelijking.rename(columns={
+            "expected_units_added": "Potentieel (woningen)",
+            "aantal": "Geplande woningen"
+        })
+
+        # 🔥 AFRONDEN
+        vergelijking["Potentieel (woningen)"] = (
+            vergelijking["Potentieel (woningen)"].round(0).astype(int)
+        )
+
+        vergelijking["Geplande woningen"] = (
+            pd.to_numeric(vergelijking["Geplande woningen"], errors="coerce")
+            .fillna(0)
+            .round(0)
+            .astype(int)
+        )
+
+        # 🔥 GRAFIEK
         fig = px.bar(
-            vergelijking.sort_values("expected_units_added", ascending=False).head(10),
+            vergelijking.sort_values("Potentieel (woningen)", ascending=False).head(10),
             x="buurtnaam",
-            y=["expected_units_added", "aantal"],
+            y=["Potentieel (woningen)", "Geplande woningen"],
             barmode="group",
             title="Potentieel vs geplande woningen per buurt",
             labels={
@@ -251,14 +271,35 @@ with colA:
                 "variable": "Type"
             }
         )
-    
+
+        # 🔥 KLEUREN TOEVOEGEN
+        fig.update_traces(
+            selector=dict(name="Potentieel (woningen)"),
+            marker_color="#2ca02c"
+        )
+
+        fig.update_traces(
+            selector=dict(name="Geplande woningen"),
+            marker_color="#d62728"
+        )
+
         st.plotly_chart(fig, use_container_width=True)
+
+        st.caption(
+            "Groen = potentieel via splitsing, rood = geplande woningbouw."
+        )
 
 with colB:
         fig = px.pie(
             analyse,
             names="Categorie",
-            title="Verdeling projecten over categorieën"
+            title="Verdeling projecten over categorieën",
+            color="Categorie",
+            color_discrete_map={
+                "🔴 Overbelast": "#ff4d4d",
+                "🟢 Onderbenut": "#4dff88",
+                "🟡 In balans": "#ffd24d"
+            }
         )
         
         st.plotly_chart(fig)
