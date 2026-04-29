@@ -13,13 +13,15 @@ st.set_page_config(page_title="Huizen Woningsplitsing Analyzer", layout="wide")
 
 
 # -------------------------
-# DATA LOADERS
+# DATA LOADERS (CACHED)
 # -------------------------
+@st.cache_data
 def load_csv(name):
     path = PROCESSED / name
     return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
 
+@st.cache_data
 def load_geo(name):
     path = PROCESSED / name
     return gpd.read_file(path) if path.exists() else gpd.GeoDataFrame()
@@ -33,14 +35,24 @@ def clean_for_join(gdf):
     return gdf
 
 
-# -------------------------
-# APP START
-# -------------------------
+@st.cache_data
+def calculate_candidates(df, min_m2, adoptie):
+    if len(df) == 0:
+        return df
+    df = df[df["oppervlakte_m2"] >= min_m2].copy()
+    df["expected_units_added"] = (
+        df["units_added_if_split"] * df["p_le_2"] * (adoptie / 100)
+    )
+    return df
 
+
+# -------------------------
+# HEADER
+# -------------------------
 st.title("Huizen Woningsplitsing Analyzer")
 
 st.markdown("""
-Deze tool geeft inzicht in het **potentieel voor woningsplitsing binnen de bestaande woningvoorraad**  
+Deze tool geeft inzicht in het **splitsingspotentieel van bestaande woningen**  
 en zet dit af tegen geplande woningbouw in Huizen.
 
 ### Wat zie je op de kaart?
@@ -50,13 +62,13 @@ en zet dit af tegen geplande woningbouw in Huizen.
 
 Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
 
-Dit model is indicatief en bedoeld om inzicht te geven in potentieel, niet om exacte aantallen te voorspellen.
+Dit model is indicatief en bedoeld voor beleidsverkenning. De uitkomsten geven richting, geen exacte aantallen.
 """)
 
 # -------------------------
 # DATA
 # -------------------------
-candidates = load_csv("split_candidates_public.csv")
+candidates_raw = load_csv("split_candidates_public.csv")
 candidate_points = load_geo("split_candidates_public.geojson")
 split_buurt = load_csv("split_potential_buurt_public.csv")
 buurten = load_geo("buurten_huizen.geojson")
@@ -73,14 +85,7 @@ with col1:
 with col2:
     adoptie = st.slider("Adoptie splitsing (%)", 1, 30, 10)
 
-if len(candidates):
-    candidates = candidates[candidates["oppervlakte_m2"] >= min_m2]
-
-    candidates["expected_units_added"] = (
-        candidates["units_added_if_split"]
-        * candidates["p_le_2"]
-        * (adoptie / 100)
-    )
+candidates = calculate_candidates(candidates_raw, min_m2, adoptie)
 
 if len(candidate_points):
     candidate_points = candidate_points[
@@ -123,7 +128,7 @@ if len(buurten):
         columns=["buurtcode", "expected_units_added"],
         key_on="feature.properties.buurtcode",
         fill_color="RdYlGn_r",
-        legend_name="Aantal extra woningen",
+        legend_name="Extra woningen",
     ).add_to(m)
 
     folium.GeoJson(
@@ -182,7 +187,7 @@ if len(projects):
 st_folium(m, use_container_width=True, height=750)
 
 st.caption(
-    "Let op: bij in- en uitzoomen kan de kaart kort verversen. Even geduld als je de overlay ziet helpt."
+    "Bij in- en uitzoomen kan de kaart kort verversen. Even geduld helpt."
 )
 
 # -------------------------
@@ -190,31 +195,37 @@ st.caption(
 # -------------------------
 st.subheader("Analyse: projecten vs splitsingspotentieel")
 
-if len(projects) and len(buurten):
+if len(projects) and len(buurten) and len(split_buurt):
     try:
         pj = gpd.sjoin(
             clean_for_join(projects),
             clean_for_join(buurten[["buurtcode", "geometry"]]),
+            how="left",
             predicate="within"
         )
 
-        analyse = pj.merge(split_buurt, on="buurtcode", how="left")
-        analyse = analyse.merge(
-            buurten[["buurtcode", "buurtnaam"]],
-            on="buurtcode",
-            how="left"
-        )
+        if "buurtcode" in pj.columns:
+            analyse = pj.merge(split_buurt, on="buurtcode", how="left")
 
-        analyse = analyse.rename(columns={
-            "buurtnaam": "Buurt",
-            "expected_units_added": "Potentieel (woningen)"
-        })
+            analyse = analyse.merge(
+                buurten[["buurtcode", "buurtnaam"]],
+                on="buurtcode",
+                how="left"
+            )
 
-        analyse = analyse.fillna({"Potentieel (woningen)": 0})
+            analyse = analyse.rename(columns={
+                "buurtnaam": "Buurt",
+                "expected_units_added": "Potentieel (woningen)"
+            })
 
-        st.dataframe(
-            analyse[["benaming", "Buurt", "Potentieel (woningen)"]]
-        )
+            analyse = analyse.fillna({"Potentieel (woningen)": 0})
+
+            st.dataframe(
+                analyse[["benaming", "Buurt", "Potentieel (woningen)"]]
+            )
+
+        else:
+            st.warning("Geen buurtkoppeling mogelijk")
 
     except Exception as e:
         st.warning("Analyse kon niet worden uitgevoerd")
