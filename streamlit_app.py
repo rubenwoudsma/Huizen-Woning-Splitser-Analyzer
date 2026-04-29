@@ -13,7 +13,7 @@ st.set_page_config(page_title="Huizen Woningsplitsing Analyzer", layout="wide")
 
 
 # -------------------------
-# DATA LOAD
+# DATA LOADERS
 # -------------------------
 def load_csv(name):
     path = PROCESSED / name
@@ -34,21 +34,23 @@ def clean_for_join(gdf):
 
 
 # -------------------------
-# APP
+# APP START
 # -------------------------
 
 st.title("Huizen Woningsplitsing Analyzer")
 
 st.markdown("""
-Deze tool laat zien waar binnen Huizen **bestaande woningen beter benut kunnen worden**  
-en hoe dit zich verhoudt tot geplande woningbouw.
+Deze tool geeft inzicht in het **potentieel voor woningsplitsing binnen de bestaande woningvoorraad**  
+en zet dit af tegen geplande woningbouw in Huizen.
 
 ### Wat zie je op de kaart?
 - 🔴 Buurten → totaal potentieel (extra woningen)
 - 🔵 Punten → individuele woningen met kans op splitsing
 - 🟣 Paarse punten → geplande bouwprojecten
 
-De analyse is indicatief en bedoeld om beleidskeuzes te ondersteunen.
+Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
+
+Dit model is indicatief en bedoeld om inzicht te geven in potentieel, niet om exacte aantallen te voorspellen.
 """)
 
 # -------------------------
@@ -86,7 +88,7 @@ if len(candidate_points):
     ]
 
 # -------------------------
-# KPI
+# KPI'S
 # -------------------------
 st.subheader("Samenvatting")
 
@@ -99,7 +101,6 @@ k3.metric("Buurten met potentieel", split_buurt["buurtcode"].nunique())
 if len(projects):
     totaal = pd.to_numeric(projects["aantal"], errors="coerce").sum()
     k4.metric("Geplande woningen", int(totaal))
-
 
 # -------------------------
 # KAART (FULL WIDTH)
@@ -122,7 +123,20 @@ if len(buurten):
         columns=["buurtcode", "expected_units_added"],
         key_on="feature.properties.buurtcode",
         fill_color="RdYlGn_r",
-        legend_name="Extra woningen",
+        legend_name="Aantal extra woningen",
+    ).add_to(m)
+
+    folium.GeoJson(
+        merged,
+        style_function=lambda x: {
+            "fillOpacity": 0,
+            "color": "black",
+            "weight": 0.5,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["buurtnaam", "expected_units_added"],
+            aliases=["Buurt", "Extra woningen"],
+        ),
     ).add_to(m)
 
 # WONINGEN
@@ -143,6 +157,10 @@ if len(candidate_points):
             radius=3,
             color=kleur,
             fill=True,
+            tooltip=f"""
+            Oppervlakte: {int(r['oppervlakte_m2'])} m²<br>
+            Kans splitsing: {round(kans*100,1)}%
+            """
         ).add_to(cluster)
 
 # PROJECTEN
@@ -153,20 +171,24 @@ if len(projects):
             radius=6,
             color="purple",
             fill=True,
+            tooltip=f"""
+            <b>{r.get('benaming','')}</b><br>
+            {r.get('locatie','')}<br>
+            Woningen: {r.get('aantal','')}<br>
+            Status: {r.get('status','')}
+            """
         ).add_to(m)
 
-# 🔥 BELANGRIJK: full width fix
 st_folium(m, use_container_width=True, height=750)
 
 st.caption(
-    "Let op: bij in- en uitzoomen kan de kaart kort verversen. Even geduld helpt."
+    "Let op: bij in- en uitzoomen kan de kaart kort verversen. Even geduld als je de overlay ziet helpt."
 )
 
-
 # -------------------------
-# ANALYSE
+# OVERLAP ANALYSE
 # -------------------------
-st.subheader("Analyse: projecten vs potentieel")
+st.subheader("Analyse: projecten vs splitsingspotentieel")
 
 if len(projects) and len(buurten):
     try:
@@ -188,11 +210,15 @@ if len(projects) and len(buurten):
             "expected_units_added": "Potentieel (woningen)"
         })
 
-        st.dataframe(analyse[["benaming", "Buurt", "Potentieel (woningen)"]])
+        analyse = analyse.fillna({"Potentieel (woningen)": 0})
 
-    except:
+        st.dataframe(
+            analyse[["benaming", "Buurt", "Potentieel (woningen)"]]
+        )
+
+    except Exception as e:
         st.warning("Analyse kon niet worden uitgevoerd")
-
+        st.write(e)
 
 # -------------------------
 # GRAFIEKEN
@@ -224,6 +250,6 @@ with colB:
             x="oppervlakte_m2",
             y="p_le_2",
             opacity=0.4,
-            title="Woninggrootte vs kans"
+            title="Woninggrootte vs kans op splitsing"
         )
         st.plotly_chart(fig, use_container_width=True)
