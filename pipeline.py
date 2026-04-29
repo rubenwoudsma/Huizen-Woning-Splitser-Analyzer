@@ -25,6 +25,7 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not zip_path.exists():
+        print("Download CBS buurten...")
         r = requests.get(CBS_URL, timeout=120)
         r.raise_for_status()
         zip_path.write_bytes(r.content)
@@ -35,21 +36,35 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 
     gpkg_path = zip_path.parent / gpkg
 
+    print("Lees CBS buurten...")
     gdf = gpd.read_file(gpkg_path, layer="buurten")
+
+    # kolommen normaliseren
     gdf.columns = [c.lower() for c in gdf.columns]
 
     # filter Huizen
     if "gm_naam" in gdf.columns:
         gdf = gdf[gdf["gm_naam"].str.lower() == "huizen"]
 
-    # kolommen fix
+    # kolommen fixen
     if "bu_code" in gdf.columns:
         gdf = gdf.rename(columns={"bu_code": "buurtcode"})
 
     if "bu_naam" in gdf.columns:
         gdf = gdf.rename(columns={"bu_naam": "buurtnaam"})
 
-    return gdf.to_crs(4326)
+    gdf = gdf.to_crs(4326)
+
+    # 🔥 BELANGRIJK: dataset verkleinen
+    gdf = gdf[["buurtcode", "buurtnaam", "geometry"]]
+
+    # 🔥 geometrie vereenvoudigen (cruciaal!)
+    gdf["geometry"] = gdf["geometry"].simplify(
+        tolerance=0.0005,
+        preserve_topology=True
+    )
+
+    return gdf
 
 
 # -------------------------
@@ -57,11 +72,12 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 # -------------------------
 
 def get_huizen_bbox():
-    # bounding box Huizen
     return [5.15, 52.25, 5.35, 52.35]
 
 
 def get_bag_huizen(bbox):
+    print("Ophalen BAG woningen...")
+
     params = {
         "bbox": ",".join(map(str, bbox)),
         "limit": 1000,
@@ -88,12 +104,14 @@ def get_bag_huizen(bbox):
 
     gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
 
-    # filter woningen
+    # alleen woningen
     if "gebruiksdoelen" in gdf.columns:
         gdf = gdf[gdf["gebruiksdoelen"].astype(str).str.contains("woon", case=False)]
 
-    # oppervlakte
     gdf["oppervlakte_m2"] = pd.to_numeric(gdf["oppervlakte"], errors="coerce")
+
+    # kolommen beperken
+    gdf = gdf[["geometry", "oppervlakte_m2"]]
 
     return gdf
 
@@ -105,7 +123,6 @@ def get_bag_huizen(bbox):
 def add_probability_model(df):
     df = df.copy()
 
-    # simpele proxy: grotere woningen → meer kans op splitsing
     df["p_le_2"] = (
         0.3 + 0.002 * (df["oppervlakte_m2"] - 80)
     ).clip(0.2, 0.9)
@@ -155,7 +172,7 @@ def main():
     out = Path("data/processed")
     out.mkdir(parents=True, exist_ok=True)
 
-    # 1. CBS buurten
+    # 1. buurten
     buurten = load_cbs_buurten()
     buurten.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
 
@@ -167,7 +184,7 @@ def main():
 
     print(f"BAG woningen: {len(houses)}")
 
-    # 3. koppel aan buurten
+    # 3. spatial join
     houses = gpd.sjoin(
         houses,
         buurten[["buurtcode", "geometry"]],
@@ -181,10 +198,12 @@ def main():
     # 5. analyse
     candidates = split_analysis(houses)
 
-    # 6. save
+    # 6. output
     candidates.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
+
     candidates.drop(columns="geometry").to_csv(
-        out / "split_candidates_public.csv", index=False
+        out / "split_candidates_public.csv",
+        index=False
     )
 
     by_buurt = (
