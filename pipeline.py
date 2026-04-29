@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import zipfile
+import time
 from pathlib import Path
 
 import geopandas as gpd
@@ -18,6 +19,25 @@ BAG_URL = "https://api.pdok.nl/kadaster/bag/ogc/v2/collections/verblijfsobject/i
 
 
 # -------------------------
+# ROBUUSTE REQUEST
+# -------------------------
+
+def safe_request(url, params=None, retries=3):
+    for i in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=60)
+            r.raise_for_status()
+            return r
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Request failed (attempt {i+1}): {e}")
+            if i < retries - 1:
+                time.sleep(2)
+            else:
+                print("❌ Definitief gefaald")
+                return None
+
+
+# -------------------------
 # CBS BUURTEN
 # -------------------------
 
@@ -26,9 +46,10 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not zip_path.exists():
-        r = requests.get(CBS_URL, timeout=120)
-        r.raise_for_status()
-        zip_path.write_bytes(r.content)
+        print("⬇️ Download CBS data")
+        r = safe_request(CBS_URL)
+        if r:
+            zip_path.write_bytes(r.content)
 
     with zipfile.ZipFile(zip_path, "r") as z:
         gpkg = [f for f in z.namelist() if f.endswith(".gpkg")][0]
@@ -37,13 +58,7 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
     gdf = gpd.read_file(zip_path.parent / gpkg, layer="buurten")
     gdf.columns = [c.lower() for c in gdf.columns]
 
-    if "gm_naam" in gdf.columns:
-        gdf["gemeente"] = gdf["gm_naam"]
-    elif "gemeentenaam" in gdf.columns:
-        gdf["gemeente"] = gdf["gemeentenaam"]
-    else:
-        raise ValueError("Geen gemeentenaam kolom gevonden")
-
+    gdf["gemeente"] = gdf.get("gm_naam", gdf.get("gemeentenaam"))
     gdf = gdf[gdf["gemeente"].str.lower().str.strip() == "huizen"]
 
     if "bu_code" in gdf.columns:
@@ -51,17 +66,14 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
     if "bu_naam" in gdf.columns:
         gdf = gdf.rename(columns={"bu_naam": "buurtnaam"})
 
-    gdf = gdf[["buurtcode", "buurtnaam", "geometry"]]
-    gdf = gdf.to_crs(4326)
-
-    # verkleinen geometrie
-    gdf["geometry"] = gdf["geometry"].simplify(0.0005, preserve_topology=True)
+    gdf = gdf[["buurtcode", "buurtnaam", "geometry"]].to_crs(4326)
+    gdf["geometry"] = gdf["geometry"].simplify(0.0005)
 
     return gdf
 
 
 # -------------------------
-# BAG DATA
+# BAG DATA (ROBUST)
 # -------------------------
 
 def get_bag_huizen():
@@ -75,15 +87,29 @@ def get_bag_huizen():
 
     url = BAG_URL
     features = []
+    page = 0
 
     while url:
-        r = requests.get(url, params=params if "?" not in url else None, timeout=60)
-        r.raise_for_status()
-        data = r.json()
+        print(f"📦 BAG pagina {page}")
 
-        features.extend(data["features"])
-        url = next((l["href"] for l in data["links"] if l["rel"] == "next"), None)
+        r = safe_request(url, params=params if "?" not in url else None)
+
+        if r is None:
+            print("⚠️ Stop BAG ophalen wegens fout")
+            break
+
+        data = r.json()
+        features.extend(data.get("features", []))
+
+        url = next((l["href"] for l in data.get("links", []) if l["rel"] == "next"), None)
         params = None
+        page += 1
+
+        time.sleep(0.2)  # throttle
+
+    if not features:
+        print("❌ Geen BAG data opgehaald")
+        return gpd.GeoDataFrame(columns=["geometry", "oppervlakte_m2"])
 
     gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
 
@@ -103,37 +129,16 @@ def get_bag_huizen():
 # -------------------------
 
 def add_probability_model(df):
-    df = df.copy()
     df["p_le_2"] = (0.3 + 0.002 * (df["oppervlakte_m2"] - 80)).clip(0.2, 0.9)
     return df
 
 
-def split_analysis(
-    df: pd.DataFrame,
-    min_total_m2: float = 120,
-    min_unit_m2: float = 50,
-    net_efficiency: float = 0.9,
-    adoption_rate: float = 0.10,
-) -> pd.DataFrame:
-
-    df = df.copy()
-    df = df[df["oppervlakte_m2"] >= min_total_m2]
-
+def split_analysis(df, min_total_m2=120, min_unit_m2=50, net_efficiency=0.9, adoption_rate=0.10):
+    df = df[df["oppervlakte_m2"] >= min_total_m2].copy()
     df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * net_efficiency
-    df["max_units_after_split"] = (
-        df["netto_splitsbaar_m2"] / min_unit_m2
-    ).apply(int).clip(upper=2)
-
-    df["split_feasible"] = df["max_units_after_split"] >= 2
+    df["max_units_after_split"] = (df["netto_splitsbaar_m2"] / min_unit_m2).astype(int).clip(upper=2)
     df["units_added_if_split"] = df["max_units_after_split"] - 1
-
-    if "p_le_2" not in df.columns:
-        df["p_le_2"] = 0.6
-
-    df["expected_units_added"] = (
-        df["units_added_if_split"] * df["p_le_2"] * adoption_rate
-    )
-
+    df["expected_units_added"] = df["units_added_if_split"] * df["p_le_2"] * adoption_rate
     return df
 
 
@@ -141,17 +146,15 @@ def split_analysis(
 # KLIMAAT DATA
 # -------------------------
 
-def load_heatstress(path: Path) -> pd.DataFrame:
+def load_heatstress(path: Path):
     df = pd.read_excel(path)
-
-    df.columns = [str(c).lower().strip() for c in df.columns]
+    df.columns = [c.lower().strip() for c in df.columns]
 
     rename_map = {}
-
     for col in df.columns:
-        if "buurtcode" in col or "bu_code" in col:
+        if "buurtcode" in col:
             rename_map[col] = "buurtcode"
-        elif "gevoel" in col or "temperatuur" in col:
+        elif "gevoel" in col:
             rename_map[col] = "hittestress"
 
     df = df.rename(columns=rename_map)
@@ -160,67 +163,24 @@ def load_heatstress(path: Path) -> pd.DataFrame:
 
 
 # -------------------------
-# 1.200 LIJST
-# -------------------------
-
-def load_1200_list(path: Path) -> pd.DataFrame:
-    df = pd.read_excel(path)
-    df.columns = [str(c).lower().strip() for c in df.columns]
-
-    rename_map = {}
-    for col in df.columns:
-        if "naam" in col:
-            rename_map[col] = "benaming"
-        elif "locatie" in col:
-            rename_map[col] = "locatie"
-        elif "aantal" in col:
-            rename_map[col] = "aantal"
-        elif "status" in col:
-            rename_map[col] = "status"
-
-    df = df.rename(columns=rename_map)
-
-    df = df[df["locatie"].notna()]
-    df = df[~df["locatie"].str.lower().str.contains("totaal", na=False)]
-
-    return df
-
-
-def geocode(query: str):
-    try:
-        r = requests.get(
-            "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free",
-            params={"q": query, "rows": 1, "fl": "centroide_ll"},
-            timeout=30
-        )
-
-        docs = r.json().get("response", {}).get("docs", [])
-        if not docs:
-            return None
-
-        lon, lat = map(float, docs[0]["centroide_ll"].replace("POINT(", "").replace(")", "").split())
-        return Point(lon, lat)
-
-    except:
-        return None
-
-
-# -------------------------
 # MAIN
 # -------------------------
 
 def main():
-    print("Pipeline gestart")
+    print("🚀 Pipeline gestart")
 
     out = Path("data/processed")
     out.mkdir(parents=True, exist_ok=True)
 
-    # CBS buurten
     buurten = load_cbs_buurten()
     buurten.to_file(out / "buurten_huizen.geojson")
 
-    # BAG
     houses = get_bag_huizen()
+
+    if len(houses) == 0:
+        print("⚠️ Geen BAG data → pipeline stopt")
+        return
+
     houses = gpd.sjoin(houses, buurten, predicate="within")
     houses = houses[houses["buurtcode"].notna()]
 
@@ -228,44 +188,19 @@ def main():
     candidates = split_analysis(houses)
 
     candidates.to_file(out / "split_candidates_public.geojson")
-    candidates.drop(columns="geometry").to_csv(
-        out / "split_candidates_public.csv", index=False
-    )
+    candidates.drop(columns="geometry").to_csv(out / "split_candidates_public.csv", index=False)
 
-    # aggregatie per buurt
     by_buurt = candidates.groupby("buurtcode")["expected_units_added"].sum().reset_index()
 
-    # -------------------------
-    # KLIMAAT TOEVOEGEN
-    # -------------------------
+    # Klimaat toevoegen
     heat_path = Path("data/raw/Downloadbuurtdashboard.xlsx")
-
     if heat_path.exists():
         heat = load_heatstress(heat_path)
         by_buurt = by_buurt.merge(heat, on="buurtcode", how="left")
 
     by_buurt.to_csv(out / "split_potential_buurt_public.csv", index=False)
 
-    # -------------------------
-    # 1.200 LIJST
-    # -------------------------
-    path = Path("data/raw/1-200-lijst-in-excel.xlsx")
-
-    if path.exists():
-        df = load_1200_list(path)
-
-        df["zoekquery"] = df["locatie"].astype(str) + ", Huizen"
-        df["geometry"] = df["zoekquery"].apply(geocode)
-
-        gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
-        gdf = gdf[gdf["geometry"].notna()]
-
-        gdf = gpd.sjoin(gdf, buurten, predicate="within")
-        gdf = gdf[gdf["buurtcode"].notna()]
-
-        gdf.to_file(out / "wimra_1200_list.geojson")
-
-    print("Pipeline klaar")
+    print("✅ Pipeline klaar")
 
 
 if __name__ == "__main__":
