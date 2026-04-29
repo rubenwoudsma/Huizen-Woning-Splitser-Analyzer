@@ -193,40 +193,25 @@ if len(projects) and len(split_buurt):
         analyse["Potentieel (woningen)"]
     )
 
-    # -------------------------
-    # CATEGORIE
-    # -------------------------
     def categoriseer(row):
         if pd.isna(row["Verhouding"]):
-            return "Onbekend"
+            return "⚪ Onbekend"
         elif row["Verhouding"] > 1:
-            return "Overbelast"
+            return "🔴 Overbelast"
         elif row["Verhouding"] < 0.5:
-            return "Onderbenut"
+            return "🟢 Onderbenut"
         else:
-            return "In balans"
+            return "🟡 In balans"
 
     analyse["Categorie"] = analyse.apply(categoriseer, axis=1)
 
     analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
     analyse["Verhouding"] = analyse["Verhouding"].round(2)
 
-    # kleur styling
-    def kleur(val):
-        if val == "Overbelast":
-            return "background-color: #ffcccc"
-        elif val == "Onderbenut":
-            return "background-color: #ccffcc"
-        elif val == "In balans":
-            return "background-color: #fff2cc"
-        return ""
-
     st.dataframe(
         analyse[
             ["benaming", "buurtnaam", "Projectgrootte", "Potentieel (woningen)", "Verhouding", "Categorie"]
-        ]
-        .rename(columns={"buurtnaam": "Buurt"})
-        .style.applymap(kleur, subset=["Categorie"])
+        ].rename(columns={"buurtnaam": "Buurt"})
     )
 
 # -------------------------
