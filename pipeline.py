@@ -60,10 +60,10 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 
     gdf = gdf.to_crs(4326)
 
-    # alleen benodigde kolommen
+    # alleen relevante kolommen
     gdf = gdf[["buurtcode", "buurtnaam", "geometry"]]
 
-    # geometrie vereenvoudigen (belangrijk voor GitHub)
+    # geometrie vereenvoudigen (belangrijk!)
     gdf["geometry"] = gdf["geometry"].simplify(
         tolerance=0.0005,
         preserve_topology=True
@@ -131,20 +131,34 @@ def add_probability_model(df):
     return df
 
 
-def split_analysis(df):
+def split_analysis(
+    df: pd.DataFrame,
+    min_total_m2: float = 120,
+    min_unit_m2: float = 50,
+    net_efficiency: float = 0.9,
+    adoption_rate: float = 0.10,
+) -> pd.DataFrame:
+
     df = df.copy()
 
-    df = df[df["oppervlakte_m2"] >= 120]
+    df = df[df["oppervlakte_m2"] >= min_total_m2]
 
-    df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * 0.9
+    df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * net_efficiency
 
     df["max_units_after_split"] = (
-        df["netto_splitsbaar_m2"] / 50
+        df["netto_splitsbaar_m2"] / min_unit_m2
     ).apply(math.floor).clip(upper=2)
+
+    df["split_feasible"] = df["max_units_after_split"] >= 2
 
     df["units_added_if_split"] = df["max_units_after_split"] - 1
 
-    df["expected_units_added"] = df["units_added_if_split"] * df["p_le_2"] * 0.10
+    if "p_le_2" not in df.columns:
+        df["p_le_2"] = 0.6
+
+    df["expected_units_added"] = (
+        df["units_added_if_split"] * df["p_le_2"] * adoption_rate
+    )
 
     return df
 
@@ -155,13 +169,11 @@ def split_analysis(df):
 
 def load_1200_list(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
-
     df.columns = [c.lower().strip() for c in df.columns]
 
     rename_map = {}
-
     for col in df.columns:
-        if "naam" in col or "benaming" in col:
+        if "naam" in col:
             rename_map[col] = "benaming"
         elif "locatie" in col or "adres" in col:
             rename_map[col] = "locatie"
@@ -222,7 +234,7 @@ def main():
         predicate="within"
     )
 
-    # filter alleen Huizen
+    # 🔥 filter alleen Huizen
     houses = houses[houses["buurtcode"].notna()]
 
     print(f"Woningen in Huizen: {len(houses)}")
@@ -233,7 +245,11 @@ def main():
 
     # output
     candidates.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
-    candidates.drop(columns="geometry").to_csv(out / "split_candidates_public.csv", index=False)
+
+    candidates.drop(columns="geometry").to_csv(
+        out / "split_candidates_public.csv",
+        index=False
+    )
 
     by_buurt = (
         candidates.groupby("buurtcode", as_index=False)["expected_units_added"]
@@ -258,7 +274,7 @@ def main():
 
         gdf_1200.to_file(out / "wimra_1200_list.geojson", driver="GeoJSON")
 
-        print(f"Projecten geocodeerd: {len(gdf_1200)}")
+        print(f"Projecten: {len(gdf_1200)}")
 
     print("Pipeline klaar")
 
