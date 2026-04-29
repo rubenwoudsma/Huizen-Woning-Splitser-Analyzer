@@ -27,22 +27,19 @@ def load_geo(name):
     return gpd.read_file(path) if path.exists() else gpd.GeoDataFrame()
 
 
-def clean_for_join(gdf):
-    gdf = gdf.copy()
-    for col in ["index_left", "index_right"]:
-        if col in gdf.columns:
-            gdf = gdf.drop(columns=[col])
-    return gdf
-
-
 @st.cache_data
 def calculate_candidates(df, min_m2, adoptie):
     if len(df) == 0:
         return df
+
     df = df[df["oppervlakte_m2"] >= min_m2].copy()
+
     df["expected_units_added"] = (
-        df["units_added_if_split"] * df["p_le_2"] * (adoptie / 100)
+        df["units_added_if_split"] *
+        df["p_le_2"] *
+        (adoptie / 100)
     )
+
     return df
 
 
@@ -52,17 +49,16 @@ def calculate_candidates(df, min_m2, adoptie):
 st.title("Huizen Woningsplitsing Analyzer")
 
 st.markdown("""
-Deze tool geeft inzicht in het **splitsingspotentieel van bestaande woningen**  
-en zet dit af tegen geplande woningbouw in Huizen.
+Deze tool geeft inzicht in het **splitsingspotentieel van bestaande woningen** en zet dit af tegen geplande woningbouw in Huizen.
 
-### Wat zie je op de kaart?
-- 🔴 Buurten → totaal potentieel (extra woningen)
-- 🔵 Punten → individuele woningen met kans op splitsing
-- 🟣 Paarse punten → geplande bouwprojecten
+**Interpretatie van de kaart:**
+- 🔴 Buurten tonen het totaal potentieel (extra woningen)
+- 🔵 Punten tonen individuele woningen met kans op splitsing
+- 🟣 Paarse punten tonen geplande bouwprojecten
 
 Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
 
-Dit model is indicatief en bedoeld voor beleidsverkenning. De uitkomsten geven richting, geen exacte aantallen.
+Dit model is indicatief en bedoeld om inzicht te geven in potentieel, niet om exacte aantallen te voorspellen.
 """)
 
 # -------------------------
@@ -133,11 +129,7 @@ if len(buurten):
 
     folium.GeoJson(
         merged,
-        style_function=lambda x: {
-            "fillOpacity": 0,
-            "color": "black",
-            "weight": 0.5,
-        },
+        style_function=lambda x: {"fillOpacity": 0, "color": "black", "weight": 0.5},
         tooltip=folium.GeoJsonTooltip(
             fields=["buurtnaam", "expected_units_added"],
             aliases=["Buurt", "Extra woningen"],
@@ -152,9 +144,9 @@ if len(candidate_points):
         kans = r.get("p_le_2", 0)
 
         kleur = (
-            "green" if kans > 0.7
-            else "orange" if kans > 0.5
-            else "red"
+            "green" if kans > 0.7 else
+            "orange" if kans > 0.5 else
+            "red"
         )
 
         folium.CircleMarker(
@@ -162,10 +154,7 @@ if len(candidate_points):
             radius=3,
             color=kleur,
             fill=True,
-            tooltip=f"""
-            Oppervlakte: {int(r['oppervlakte_m2'])} m²<br>
-            Kans splitsing: {round(kans*100,1)}%
-            """
+            tooltip=f"{int(r['oppervlakte_m2'])} m² | {round(kans*100,1)}%",
         ).add_to(cluster)
 
 # PROJECTEN
@@ -176,35 +165,37 @@ if len(projects):
             radius=6,
             color="purple",
             fill=True,
-            tooltip=f"""
-            <b>{r.get('benaming','')}</b><br>
-            {r.get('locatie','')}<br>
-            Woningen: {r.get('aantal','')}<br>
-            Status: {r.get('status','')}
-            """
+            tooltip=r.get("benaming", "")
         ).add_to(m)
 
-st_folium(m, use_container_width=True, height=750)
+# 🔥 BELANGRIJK: voorkomt reruns
+st_folium(m, use_container_width=True, height=750, returned_objects=[])
 
 st.caption(
     "Bij in- en uitzoomen kan de kaart kort verversen. Even geduld helpt."
 )
 
 # -------------------------
-# OVERLAP ANALYSE
+# OVERLAP ANALYSE (FIXED)
 # -------------------------
 st.subheader("Analyse: projecten vs splitsingspotentieel")
 
-if len(projects) and len(buurten) and len(split_buurt):
+if len(projects) and len(buurten):
     try:
+        # 🔥 CRS FIX
+        if projects.crs != buurten.crs:
+            projects = projects.to_crs(buurten.crs)
+
         pj = gpd.sjoin(
-            clean_for_join(projects),
-            clean_for_join(buurten[["buurtcode", "geometry"]]),
+            projects,
+            buurten[["buurtcode", "geometry"]],
             how="left",
             predicate="within"
         )
 
-        if "buurtcode" in pj.columns:
+        if "buurtcode" not in pj.columns:
+            st.warning("Geen overlap gevonden tussen projecten en buurten")
+        else:
             analyse = pj.merge(split_buurt, on="buurtcode", how="left")
 
             analyse = analyse.merge(
@@ -218,14 +209,11 @@ if len(projects) and len(buurten) and len(split_buurt):
                 "expected_units_added": "Potentieel (woningen)"
             })
 
-            analyse = analyse.fillna({"Potentieel (woningen)": 0})
+            analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].fillna(0)
 
             st.dataframe(
                 analyse[["benaming", "Buurt", "Potentieel (woningen)"]]
             )
-
-        else:
-            st.warning("Geen buurtkoppeling mogelijk")
 
     except Exception as e:
         st.warning("Analyse kon niet worden uitgevoerd")
@@ -261,6 +249,6 @@ with colB:
             x="oppervlakte_m2",
             y="p_le_2",
             opacity=0.4,
-            title="Woninggrootte vs kans op splitsing"
+            title="Woninggrootte vs kans"
         )
         st.plotly_chart(fig, use_container_width=True)
