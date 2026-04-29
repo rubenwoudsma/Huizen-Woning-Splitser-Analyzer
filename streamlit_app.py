@@ -19,62 +19,28 @@ st.set_page_config(page_title="Huizen Woningsplitsing Analyzer", layout="wide")
 # HELPERS
 # -------------------------
 
-def safe_lower(df):
-    if df is None or len(df) == 0:
-        return df
-    df.columns = [c.lower() for c in df.columns]
-    return df
+def load_csv(name):
+    path = PROCESSED / name
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path)
 
 
-def ensure_buurtcode(df):
-    if df is None or len(df) == 0:
-        return df
-
-    if "buurtcode" in df.columns:
-        return df
-
-    if "bu_code" in df.columns:
-        return df.rename(columns={"bu_code": "buurtcode"})
-
-    return df
+def load_geo(name):
+    path = PROCESSED / name
+    if not path.exists():
+        return gpd.GeoDataFrame()
+    return gpd.read_file(path)
 
 
-def clean_gdf_for_join(gdf):
-    """Verwijder probleemkolommen voor spatial joins"""
-    if gdf is None or len(gdf) == 0:
+def clean_for_join(gdf):
+    if len(gdf) == 0:
         return gdf
-
     gdf = gdf.copy()
-
     for col in ["index_left", "index_right"]:
         if col in gdf.columns:
             gdf = gdf.drop(columns=[col])
-
     return gdf
-
-
-@st.cache_data
-def load_csv(name: str) -> pd.DataFrame:
-    path = PROCESSED / name
-    if not path.exists():
-        return pd.DataFrame()
-
-    try:
-        return safe_lower(pd.read_csv(path))
-    except Exception:
-        return pd.DataFrame()
-
-
-@st.cache_data
-def load_geojson(name: str):
-    path = PROCESSED / name
-    if not path.exists():
-        return gpd.GeoDataFrame()
-
-    try:
-        return safe_lower(gpd.read_file(path))
-    except Exception:
-        return gpd.GeoDataFrame()
 
 
 # -------------------------
@@ -82,51 +48,40 @@ def load_geojson(name: str):
 # -------------------------
 
 def main():
-    # HEADER
     st.title("Huizen Woningsplitsing Analyzer")
 
-    st.markdown(
-        """
-        Deze tool geeft inzicht in het **splitsingspotentieel van bestaande woningen**  
-        en zet dit af tegen geplande woningbouw in de gemeente Huizen.
+    st.markdown("""
+    Deze tool laat zien waar binnen Huizen **bestaande woningen mogelijk beter benut kunnen worden**  
+    en hoe dit zich verhoudt tot de geplande woningbouw.
 
-        Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
-        """
-    )
+    **Interpretatie:**
+    - Grote woningen + kleine huishoudens → kans op splitsing
+    - Buurten tonen het **totale potentieel in aantal woningen**
+    - Punten tonen individuele woningen met indicatieve kans
 
-    st.info(
-        "Deze analyse is indicatief en bedoeld om beleidskeuzes te ondersteunen, niet om exacte aantallen te voorspellen."
-    )
+    Ontwikkeld door [Ruben Woudsma](https://rubenwoudsma.nl)
+    """)
 
-    # -------------------------
     # DATA
-    # -------------------------
     candidates = load_csv("split_candidates_public.csv")
-    candidate_points = load_geojson("split_candidates_public.geojson")
+    candidate_points = load_geo("split_candidates_public.geojson")
     split_buurt = load_csv("split_potential_buurt_public.csv")
-    buurten = load_geojson("buurten_huizen.geojson")
-    projects = load_geojson("wimra_1200_list.geojson")
+    buurten = load_geo("buurten_huizen.geojson")
+    projects = load_geo("wimra_1200_list.geojson")
 
-    buurten = ensure_buurtcode(buurten)
-    split_buurt = ensure_buurtcode(split_buurt)
+    # FILTER
+    col1, col2 = st.columns([1, 3])
 
-    # -------------------------
-    # FILTERS
-    # -------------------------
-    col_filter, col_map = st.columns([1, 3])
+    with col1:
+        min_m2 = st.slider("Minimale woninggrootte (m²)", 80, 250, 120)
+        adoptie = st.slider("Adoptie (%)", 1, 30, 10)
 
-    with col_filter:
-        min_m2 = st.slider("Minimale woninggrootte (m²)", 80, 250, 120, 5)
-        adoptie = st.slider("Adoptie splitsing (%)", 1, 30, 10)
-
-    # filter kandidaten
     if len(candidates):
         candidates = candidates[candidates["oppervlakte_m2"] >= min_m2]
-
         candidates["expected_units_added"] = (
-            candidates["units_added_if_split"]
-            * candidates["p_le_2"]
-            * (adoptie / 100)
+            candidates["units_added_if_split"] *
+            candidates["p_le_2"] *
+            (adoptie / 100)
         )
 
     if len(candidate_points):
@@ -134,40 +89,44 @@ def main():
             candidate_points["oppervlakte_m2"] >= min_m2
         ]
 
-    # -------------------------
-    # KPI'S
-    # -------------------------
-    k1, k2, k3 = st.columns(3)
+    # KPI'S MET UITLEG
+    st.subheader("Samenvatting")
 
-    k1.metric("Kandidaat-adressen", int(len(candidates)))
+    c1, c2, c3, c4 = st.columns(4)
 
-    k2.metric(
-        "Verwachte extra woningen",
-        round(float(candidates["expected_units_added"].sum()), 1)
-        if len(candidates) else 0
+    c1.metric(
+        "Kandidaat-adressen",
+        len(candidates),
+        help="Aantal woningen groter dan de gekozen minimale oppervlakte"
     )
 
-    k3.metric(
+    c2.metric(
+        "Verwachte extra woningen",
+        round(candidates["expected_units_added"].sum(), 1),
+        help="Indicatief aantal woningen bij gekozen adoptiepercentage"
+    )
+
+    c3.metric(
         "Buurten met potentieel",
-        int(split_buurt["buurtcode"].nunique())
-        if len(split_buurt) else 0
+        split_buurt["buurtcode"].nunique(),
+        help="Aantal buurten waar splitsingspotentieel aanwezig is"
     )
 
     if len(projects):
-        totaal_projecten = pd.to_numeric(projects.get("aantal"), errors="coerce").sum()
-
-        st.metric(
-            "Geplande woningen (1.200-lijst)",
-            int(totaal_projecten) if not pd.isna(totaal_projecten) else 0
+        totaal = pd.to_numeric(projects["aantal"], errors="coerce").sum()
+        c4.metric(
+            "Geplande woningen",
+            int(totaal),
+            help="Aantal woningen uit de 1.200-lijst"
         )
 
     # -------------------------
     # KAART
     # -------------------------
-    with col_map:
+    with col2:
         m = folium.Map(location=[52.299, 5.241], zoom_start=12)
 
-        # BUURTEN HEATMAP
+        # BUURTEN
         if len(buurten):
             merged = buurten.merge(split_buurt, on="buurtcode", how="left")
             merged["expected_units_added"] = merged["expected_units_added"].fillna(0)
@@ -175,32 +134,21 @@ def main():
             if "buurtnaam" not in merged.columns:
                 merged["buurtnaam"] = merged["buurtcode"]
 
-            merged["potentieel_pct"] = (
-                merged["expected_units_added"] * 100
-            ).round(2)
-
             folium.Choropleth(
                 geo_data=merged,
                 data=merged,
                 columns=["buurtcode", "expected_units_added"],
                 key_on="feature.properties.buurtcode",
                 fill_color="RdYlGn_r",
-                fill_opacity=0.7,
-                line_opacity=0.2,
-                legend_name="Splitsingspotentieel",
+                legend_name="Aantal extra woningen",
             ).add_to(m)
 
             folium.GeoJson(
                 merged,
-                style_function=lambda x: {
-                    "fillOpacity": 0,
-                    "color": "black",
-                    "weight": 0.5,
-                },
                 tooltip=folium.GeoJsonTooltip(
-                    fields=["buurtnaam", "potentieel_pct"],
-                    aliases=["Buurt", "Potentieel (%)"],
-                ),
+                    fields=["buurtnaam", "expected_units_added"],
+                    aliases=["Buurt", "Extra woningen"],
+                )
             ).add_to(m)
 
         # WONINGEN
@@ -209,25 +157,22 @@ def main():
 
             for _, r in candidate_points.iterrows():
                 kans = r.get("p_le_2", 0)
-                kans_pct = round(kans * 100, 1)
 
                 kleur = (
-                    "green" if kans > 0.7
-                    else "orange" if kans > 0.5
-                    else "red"
+                    "green" if kans > 0.7 else
+                    "orange" if kans > 0.5 else
+                    "red"
                 )
 
                 folium.CircleMarker(
                     location=[r.geometry.y, r.geometry.x],
-                    radius=4,
+                    radius=3,
                     color=kleur,
                     fill=True,
-                    fill_opacity=0.7,
                     tooltip=f"""
-                    <b>Woning</b><br>
-                    Oppervlakte: {round(r.get('oppervlakte_m2', 0))} m²<br>
-                    Kans ≤2 bewoners: {kans_pct}%
-                    """,
+                    Oppervlakte: {int(r['oppervlakte_m2'])} m²<br>
+                    Kans: {round(kans*100,1)}%
+                    """
                 ).add_to(cluster)
 
         # PROJECTEN
@@ -238,89 +183,68 @@ def main():
                     radius=6,
                     color="purple",
                     fill=True,
-                    fill_opacity=0.9,
-                    tooltip=f"""
-                    <b>{r.get('benaming','')}</b><br>
-                    {r.get('locatie','')}<br>
-                    Woningen: {r.get('aantal','')}<br>
-                    Status: {r.get('status','')}
-                    """,
+                    tooltip=f"{r.get('benaming','')} ({r.get('aantal','')})"
                 ).add_to(m)
 
-        st_folium(m, width=1100, height=650)
+        st_folium(m, height=600)
 
     # -------------------------
     # OVERLAP ANALYSE
     # -------------------------
+    st.subheader("Analyse projecten vs potentieel")
+
     if len(projects) and len(buurten):
-        st.subheader("Analyse: projecten vs splitsingspotentieel")
-
         try:
-            projects_clean = clean_gdf_for_join(projects)
-            buurten_clean = clean_gdf_for_join(buurten)
-
-            projects_join = gpd.sjoin(
-                projects_clean,
-                buurten_clean[["buurtcode", "geometry"]],
-                how="left",
+            pj = gpd.sjoin(
+                clean_for_join(projects),
+                clean_for_join(buurten[["buurtcode", "geometry"]]),
                 predicate="within"
             )
 
-            projects_analysis = projects_join.merge(
-                split_buurt,
-                on="buurtcode",
-                how="left"
-            )
-
-            st.dataframe(
-                projects_analysis[
-                    ["benaming", "buurtcode", "expected_units_added"]
-                ].sort_values("expected_units_added", ascending=False)
-            )
-
-        except Exception as e:
-            st.warning("Overlap analyse kon niet worden uitgevoerd.")
-            st.write(e)
-
-    # -------------------------
-    # GRAFIEKEN
-    # -------------------------
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if len(split_buurt):
-            split_named = split_buurt.merge(
+            analyse = pj.merge(split_buurt, on="buurtcode", how="left")
+            analyse = analyse.merge(
                 buurten[["buurtcode", "buurtnaam"]],
                 on="buurtcode",
                 how="left"
             )
 
+            analyse = analyse.rename(columns={
+                "expected_units_added": "Potentieel (woningen)",
+                "buurtnaam": "Buurt"
+            })
+
+            st.dataframe(
+                analyse[["benaming", "Buurt", "Potentieel (woningen)"]]
+            )
+
+        except Exception as e:
+            st.warning("Analyse kon niet worden uitgevoerd")
+
+    # -------------------------
+    # GRAFIEKEN
+    # -------------------------
+    colA, colB = st.columns(2)
+
+    with colA:
+        if len(split_buurt):
             fig = px.bar(
-                split_named.sort_values("expected_units_added", ascending=False).head(10),
-                x="buurtnaam",
+                split_buurt.sort_values("expected_units_added", ascending=False).head(10),
+                x="buurtcode",
                 y="expected_units_added",
-                title="Top buurten",
+                title="Top buurten (aantal woningen)"
             )
             st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
+    with colB:
         if len(candidates):
             fig = px.scatter(
                 candidates,
                 x="oppervlakte_m2",
-                y="expected_units_added",
-                title="Woninggrootte vs potentieel",
+                y="p_le_2",
+                title="Woninggrootte vs kans op splitsing",
+                opacity=0.4
             )
             st.plotly_chart(fig, use_container_width=True)
-
-    # DOWNLOAD
-    if len(candidates):
-        st.download_button(
-            "Download dataset",
-            data=candidates.to_csv(index=False).encode("utf-8"),
-            file_name="split_candidates.csv",
-            mime="text/csv",
-        )
 
 
 if __name__ == "__main__":
