@@ -197,10 +197,11 @@ if len(projects) and len(buurten) and len(split_buurt):
         projects_clean = clean_for_join(projects)
         buurten_clean = clean_for_join(buurten)
 
-        # 🔥 CRS fix
+        # CRS gelijk maken (belangrijk!)
         if projects_clean.crs != buurten_clean.crs:
             projects_clean = projects_clean.to_crs(buurten_clean.crs)
 
+        # spatial join
         pj = gpd.sjoin(
             projects_clean,
             buurten_clean[["buurtcode", "geometry"]],
@@ -208,22 +209,35 @@ if len(projects) and len(buurten) and len(split_buurt):
             predicate="within"
         )
 
-        analyse = pj.merge(split_buurt, on="buurtcode", how="left")
+        # 🔥 DEBUG CHECK
+        if "buurtcode" not in pj.columns:
+            st.warning("Geen buurtcode gevonden na spatial join")
+            st.write("Kolommen in resultaat:", pj.columns)
+            st.write(pj.head())
+        else:
+            # merge met potentieel
+            analyse = pj.merge(
+                split_buurt,
+                on="buurtcode",
+                how="left"
+            )
 
-        analyse = analyse.merge(
-            buurten_clean[["buurtcode", "buurtnaam"]],
-            on="buurtcode",
-            how="left"
-        )
+            analyse = analyse.merge(
+                buurten_clean[["buurtcode", "buurtnaam"]],
+                on="buurtcode",
+                how="left"
+            )
 
-        analyse = analyse.rename(columns={
-            "buurtnaam": "Buurt",
-            "expected_units_added": "Potentieel (woningen)"
-        })
+            analyse = analyse.rename(columns={
+                "buurtnaam": "Buurt",
+                "expected_units_added": "Potentieel (woningen)"
+            })
 
-        analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].fillna(0)
+            analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].fillna(0)
 
-        st.dataframe(analyse[["benaming", "Buurt", "Potentieel (woningen)"]])
+            st.dataframe(
+                analyse[["benaming", "Buurt", "Potentieel (woningen)"]]
+            )
 
     except Exception as e:
         st.warning("Analyse kon niet worden uitgevoerd")
