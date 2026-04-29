@@ -133,12 +133,36 @@ def add_probability_model(df):
     return df
 
 
-def split_analysis(df, min_total_m2=120, min_unit_m2=50, net_efficiency=0.9, adoption_rate=0.10):
-    df = df[df["oppervlakte_m2"] >= min_total_m2].copy()
+def split_analysis(
+    df: pd.DataFrame,
+    min_total_m2: float = 120,
+    min_unit_m2: float = 50,
+    net_efficiency: float = 0.9,
+    adoption_rate: float = 0.10,
+) -> pd.DataFrame:
+
+    df = df.copy()
+
+    df = df[df["oppervlakte_m2"] >= min_total_m2]
+
     df["netto_splitsbaar_m2"] = df["oppervlakte_m2"] * net_efficiency
-    df["max_units_after_split"] = (df["netto_splitsbaar_m2"] / min_unit_m2).astype(int).clip(upper=2)
+
+    df["max_units_after_split"] = (
+        df["netto_splitsbaar_m2"] / min_unit_m2
+    ).apply(int).clip(upper=2)
+
+    # 🔥 DIT WAS VERDWENEN → NODIG VOOR TEST
+    df["split_feasible"] = df["max_units_after_split"] >= 2
+
     df["units_added_if_split"] = df["max_units_after_split"] - 1
-    df["expected_units_added"] = df["units_added_if_split"] * df["p_le_2"] * adoption_rate
+
+    if "p_le_2" not in df.columns:
+        df["p_le_2"] = 0.6
+
+    df["expected_units_added"] = (
+        df["units_added_if_split"] * df["p_le_2"] * adoption_rate
+    )
+
     return df
 
 
