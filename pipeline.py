@@ -42,7 +42,7 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 
     gdf.columns = [c.lower() for c in gdf.columns]
 
-    # robuuste gemeentenaam detectie
+    # robuuste gemeentenaam
     if "gm_naam" in gdf.columns:
         gdf["gemeente"] = gdf["gm_naam"]
     elif "gemeentenaam" in gdf.columns:
@@ -52,7 +52,6 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 
     gdf = gdf[gdf["gemeente"].str.lower().str.strip() == "huizen"]
 
-    # kolommen fixen
     if "bu_code" in gdf.columns:
         gdf = gdf.rename(columns={"bu_code": "buurtcode"})
     if "bu_naam" in gdf.columns:
@@ -60,9 +59,10 @@ def load_cbs_buurten() -> gpd.GeoDataFrame:
 
     gdf = gdf.to_crs(4326)
 
+    # alleen relevante kolommen
     gdf = gdf[["buurtcode", "buurtnaam", "geometry"]]
 
-    # 🔥 geometrie verkleinen
+    # geometrie verkleinen (GitHub safe)
     gdf["geometry"] = gdf["geometry"].simplify(
         tolerance=0.0005,
         preserve_topology=True
@@ -167,6 +167,7 @@ def split_analysis(
 # -------------------------
 
 def load_1200_list(path: Path) -> pd.DataFrame:
+    # meerdere formaten proberen
     try:
         df = pd.read_csv(path)
     except Exception:
@@ -177,10 +178,10 @@ def load_1200_list(path: Path) -> pd.DataFrame:
 
     df.columns = [str(c).lower().strip() for c in df.columns]
 
+    # kolommen mappen
     rename_map = {}
-
     for col in df.columns:
-        if "naam" in col or "benaming" in col:
+        if "naam" in col:
             rename_map[col] = "benaming"
         elif "locatie" in col or "adres" in col:
             rename_map[col] = "locatie"
@@ -191,6 +192,10 @@ def load_1200_list(path: Path) -> pd.DataFrame:
 
     df = df.rename(columns=rename_map)
 
+    # 🔥 opschonen
+    df = df[df["locatie"].notna()]
+    df = df[~df["locatie"].str.lower().str.contains("totaal", na=False)]
+
     return df
 
 
@@ -198,7 +203,11 @@ def geocode_locatieserver(query: str):
     url = "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free"
 
     try:
-        r = requests.get(url, params={"q": query, "rows": 1, "fl": "centroide_ll"}, timeout=30)
+        r = requests.get(
+            url,
+            params={"q": query, "rows": 1, "fl": "centroide_ll"},
+            timeout=30
+        )
         r.raise_for_status()
 
         docs = r.json().get("response", {}).get("docs", [])
@@ -227,13 +236,13 @@ def main():
     out = Path("data/processed")
     out.mkdir(parents=True, exist_ok=True)
 
-    # CBS
+    # CBS buurten
     buurten = load_cbs_buurten()
     buurten.to_file(out / "buurten_huizen.geojson", driver="GeoJSON")
 
     print(f"Buurten: {len(buurten)}")
 
-    # BAG
+    # BAG woningen
     houses = get_bag_huizen(get_huizen_bbox())
 
     houses = gpd.sjoin(
@@ -243,6 +252,7 @@ def main():
         predicate="within"
     )
 
+    # alleen Huizen
     houses = houses[houses["buurtcode"].notna()]
 
     print(f"Woningen in Huizen: {len(houses)}")
@@ -252,7 +262,9 @@ def main():
     candidates = split_analysis(houses)
 
     candidates.to_file(out / "split_candidates_public.geojson", driver="GeoJSON")
-    candidates.drop(columns="geometry").to_csv(out / "split_candidates_public.csv", index=False)
+    candidates.drop(columns="geometry").to_csv(
+        out / "split_candidates_public.csv", index=False
+    )
 
     by_buurt = (
         candidates.groupby("buurtcode", as_index=False)["expected_units_added"]
@@ -261,14 +273,18 @@ def main():
 
     by_buurt.to_csv(out / "split_potential_buurt_public.csv", index=False)
 
-    # 1.200 lijst
+    # -------------------------
+    # 1.200 LIJST
+    # -------------------------
     try:
         path_1200 = Path("data/raw/1-200-lijst-in-excel.xlsx")
 
         if path_1200.exists():
+            print("Verwerken 1.200-lijst...")
+
             df_1200 = load_1200_list(path_1200)
 
-            df_1200["zoekquery"] = df_1200["locatie"].astype(str) + ", Huizen"
+            df_1200["zoekquery"] = df_1200["locatie"].astype(str) + ", Huizen, Nederland"
 
             df_1200["geometry"] = df_1200["zoekquery"].apply(geocode_locatieserver)
 
@@ -276,12 +292,20 @@ def main():
 
             gdf_1200 = gdf_1200[gdf_1200["geometry"].notna()]
 
+            # 🔥 extra filter → alleen Huizen
+            gdf_1200 = gpd.sjoin(
+                gdf_1200,
+                buurten[["geometry"]],
+                how="inner",
+                predicate="within"
+            )
+
             gdf_1200.to_file(out / "wimra_1200_list.geojson", driver="GeoJSON")
 
             print(f"Projecten: {len(gdf_1200)}")
 
     except Exception as e:
-        print(f"Fout bij verwerken 1.200-lijst: {e}")
+        print(f"Fout bij 1.200-lijst: {e}")
 
     print("Pipeline klaar")
 
