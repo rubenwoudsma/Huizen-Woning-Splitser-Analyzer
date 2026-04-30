@@ -253,7 +253,12 @@ if len(projects) and len(split_buurt):
 
     analyse["Conclusie"] = analyse.apply(gecombineerde_analyse, axis=1)
 
-    analyse["Gebruik potentieel (%)"] = (analyse["Verhouding"] * 100).round(0).astype(int)
+    analyse["Gebruik potentieel (%)"] = (
+    analyse["Verhouding"]
+        .replace([float("inf"), -float("inf")], pd.NA)
+        .fillna(0)
+        * 100
+    ).round(0).astype(int)
 
     analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
     analyse["Verhouding"] = analyse["Verhouding"].round(2)
