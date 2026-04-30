@@ -257,7 +257,7 @@ if len(projects) and len(split_buurt):
 
     st.dataframe(
         analyse[
-            ["benaming", "buurtnaam", "wijktype", "Projectgrootte", "Potentieel (woningen)", "schaduw", "Verhouding", "Categorie", "Schaduw categorie", "Conclusie", "Potentieel per 1000 inw"]
+            ["benaming", "buurtnaam", "wijktype", "Projectgrootte", "Potentieel (woningen)", "schaduw", "Verhouding", "Categorie", "Schaduw categorie", "Conclusie", "Potentieel per 1000 inwoners"]
         ].rename(columns={"buurtnaam": "Buurt", "wijktype": "Wijktype", "schaduw": "Schaduw (%)" })
     )
 
