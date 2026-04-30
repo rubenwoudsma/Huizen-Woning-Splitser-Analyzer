@@ -183,34 +183,59 @@ def load_heatstress(path: Path) -> pd.DataFrame:
 
         buurt_col = None
         shadow_col = None
+        wijktype_col = None
+        inwoners_col = None
 
-        # 🔍 buurtcode zoeken
+        # 🔍 kolommen zoeken (robuust!)
         for col in df.columns:
             if "buurtcode" in col:
                 buurt_col = col
-
-        # 🔍 schaduw kolom zoeken (AHN4)
-        for col in df.columns:
-            if "shdtot" in col and "ahn4" in col:
+            elif "shdtot" in col and "ahn4" in col:
                 shadow_col = col
+            elif "wijktype" in col:
+                wijktype_col = col
+            elif "aant_inw" in col:
+                inwoners_col = col
 
+        # 🔥 fallback als minimaal niet gevonden
         if buurt_col is None or shadow_col is None:
             print("⚠️ Schaduwdata niet bruikbaar → overslaan")
-            return pd.DataFrame(columns=["buurtcode", "schaduw"])
+            return pd.DataFrame(columns=["buurtcode", "schaduw", "wijktype", "aantal_inwoners"])
 
-        df = df.rename(columns={
+        # 🔄 rename alleen wat bestaat
+        rename_map = {
             buurt_col: "buurtcode",
             shadow_col: "schaduw"
-        })
+        }
 
-        # numeriek maken
+        if wijktype_col:
+            rename_map[wijktype_col] = "wijktype"
+
+        if inwoners_col:
+            rename_map[inwoners_col] = "aantal_inwoners"
+
+        df = df.rename(columns=rename_map)
+
+        # 🔢 numeriek maken
         df["schaduw"] = pd.to_numeric(df["schaduw"], errors="coerce")
 
-        return df[["buurtcode", "schaduw"]]
+        if "aantal_inwoners" in df.columns:
+            df["aantal_inwoners"] = pd.to_numeric(df["aantal_inwoners"], errors="coerce")
+
+        # 🔥 alleen kolommen selecteren die bestaan
+        cols = ["buurtcode", "schaduw"]
+
+        if "wijktype" in df.columns:
+            cols.append("wijktype")
+
+        if "aantal_inwoners" in df.columns:
+            cols.append("aantal_inwoners")
+
+        return df[cols]
 
     except Exception as e:
         print(f"⚠️ Fout bij laden klimaatdata: {e}")
-        return pd.DataFrame(columns=["buurtcode", "schaduw"])
+        return pd.DataFrame(columns=["buurtcode", "schaduw", "wijktype", "aantal_inwoners"])
 
 
 # -------------------------
