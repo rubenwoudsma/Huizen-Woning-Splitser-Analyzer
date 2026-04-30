@@ -193,6 +193,20 @@ if len(projects) and len(split_buurt):
         analyse["Potentieel (woningen)"]
     )
 
+    # 🔥 nieuwe kolommen
+    if "wijktype" in analyse.columns:
+        analyse["wijktype"] = analyse["wijktype"].fillna("Onbekend")
+    
+    if "aantal_inwoners" in analyse.columns:
+        analyse["aantal_inwoners"] = pd.to_numeric(analyse["aantal_inwoners"], errors="coerce")
+    
+    # 🔥 relatieve maat (sterk!)
+    if "aantal_inwoners" in analyse.columns:
+        analyse["Potentieel per 1000 inwoners"] = (
+            analyse["Potentieel (woningen)"] /
+            analyse["aantal_inwoners"] * 1000
+        ).round(2)
+    
     def categoriseer(row):
         if pd.isna(row["Verhouding"]):
             return "⚪ Onbekend"
@@ -243,8 +257,8 @@ if len(projects) and len(split_buurt):
 
     st.dataframe(
         analyse[
-            ["benaming", "buurtnaam", "Projectgrootte", "Potentieel (woningen)", "schaduw", "Verhouding", "Categorie", "Schaduw categorie", "Conclusie"]
-        ].rename(columns={"buurtnaam": "Buurt"})
+            ["benaming", "buurtnaam", "wijktype", "Projectgrootte", "Potentieel (woningen)", "schaduw", "Verhouding", "Categorie", "Schaduw categorie", "Conclusie", "Potentieel per 1000 inw"]
+        ].rename(columns={"buurtnaam": "Buurt", "wijktype": "Wijktype", "schaduw": "Schaduw (%)" })
     )
 
 # -------------------------
