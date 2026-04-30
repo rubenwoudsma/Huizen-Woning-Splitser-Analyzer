@@ -1,6 +1,6 @@
 # Huizen Woningsplitsing Analyzer
 
-De Huizen Woningsplitsing Analyzer is een datagedreven tool die inzicht geeft in het **splitsingspotentieel van bestaande woningen** binnen de gemeente Huizen, en dit vergelijkt met de geplande woningbouw uit de zogenoemde “1.200-lijst”.
+De Huizen Woningsplitsing Analyzer is een datagedreven tool die inzicht geeft in het **woningpotentieel binnen de bestaande woningvoorraad** van de gemeente Huizen en dit vergelijkt met geplande woningbouwprojecten.
 
 🔗 Live applicatie:  
 https://huizen-woning-splitser-analyzer.streamlit.app/
@@ -12,13 +12,13 @@ https://rubenwoudsma.nl
 
 ## Aanleiding
 
-De gemeente Huizen staat voor een complexe woningbouwopgave. De beschikbare ruimte is beperkt, terwijl de vraag naar woningen toeneemt. Tegelijkertijd is er maatschappelijke weerstand tegen grootschalige nieuwbouw, verdichting en aantasting van het dorpse karakter.
+De woningbouwopgave in Huizen is complex. De beschikbare ruimte is beperkt en tegelijkertijd is er een sterke wens om nieuwe woningen te realiseren voor lokale doelgroepen.
 
-De huidige discussie richt zich vooral op:
+De discussie richt zich vaak op de vraag:
 
 > Waar kunnen we nog bouwen?
 
-Dit project voegt daar een tweede perspectief aan toe:
+Deze tool voegt daar een tweede perspectief aan toe:
 
 > Waar zit al ruimte in de bestaande woningvoorraad?
 
@@ -26,64 +26,63 @@ Dit project voegt daar een tweede perspectief aan toe:
 
 ## Doel van de applicatie
 
-Deze tool heeft als doel om:
+De applicatie heeft als doel om:
 
-- inzicht te geven in **latent woningpotentieel** binnen bestaande wijken  
-- dit potentieel te vergelijken met **geplande woningbouw**  
-- zichtbaar te maken waar **beleidskeuzes en ruimtelijk potentieel niet op elkaar aansluiten**
+- inzicht te geven in **latente woningcapaciteit (woningsplitsing)**
+- deze te vergelijken met **geplande woningbouw (1.200-lijst)**
+- en dit te koppelen aan **leefbaarheid (klimaat / schaduw)**
 
-Het model is nadrukkelijk indicatief en bedoeld als **ondersteuning voor beleidsanalyse en discussie**.
+De analyse is indicatief en bedoeld als ondersteuning voor beleidsvorming en ruimtelijke afwegingen.
 
 ---
 
 ## Gebruikte databronnen
 
-De analyse is volledig gebaseerd op publieke data en één aanvullende bron uit gemeentelijke besluitvorming.
+De analyse combineert meerdere publieke databronnen:
 
 ### 1. BAG (Basisregistratie Adressen en Gebouwen)
-Bron: PDOK API  
-- Locaties van verblijfsobjecten  
-- Oppervlakte per woning  
-- Gebruiksdoelen (filter op wonen)
+Bron: PDOK  
+https://www.pdok.nl/
 
-Deze dataset vormt de basis voor het identificeren van woningen.
+- Locaties van verblijfsobjecten  
+- Oppervlakte van woningen  
+- Gebruiksdoelen  
+
+Deze data wordt gebruikt om individuele woningen te analyseren.
 
 ---
 
 ### 2. CBS Wijk- en Buurtkaart
 Bron: CBS Open Data  
+https://www.cbs.nl/
+
 - Buurt- en wijkgrenzen  
 - Gemeentelijke indeling  
 
-Wordt gebruikt om:
-- woningen ruimtelijk te koppelen aan buurten  
-- aggregaties per buurt te maken  
+Wordt gebruikt om woningen ruimtelijk te koppelen aan buurten.
 
 ---
 
-### 3. Modelmatige aannames (analyse-laag)
+### 3. Klimaateffectatlas (schaduwdata)
+Bron: Klimaateffectatlas  
+https://www.klimaateffectatlas.nl/
 
-Omdat er geen openbare data beschikbaar is over huishoudgrootte per woning, wordt een indicatief model gebruikt:
+- Schaduwpercentage per buurt  
+- Afgeleid van landelijke klimaatscenario’s  
 
-- Grotere woningen → hogere kans op kleine huishoudens  
-- Kleine huishoudens → grotere kans op splitsing  
+Deze data wordt gebruikt als **indicator voor hittestress en leefbaarheid**.
 
-Dit wordt vertaald naar:
-- `p_le_2` → kans op huishoudens ≤ 2 personen  
-- `expected_units_added` → verwacht splitsingspotentieel  
-
-Belangrijk:
-> Dit is een vereenvoudigd model en geen exacte weergave van de werkelijkheid.
+Let op: deze data valt onder een Creative Commons-licentie (CC-BY).  
+Bronvermelding is verplicht bij gebruik.
 
 ---
 
 ### 4. 1.200-lijst (gemeente Huizen)
 
-Bron: gemeenteraad / woonconferentie / participatie  
-- Overzicht van bestaande en geplande woningbouwprojecten  
-- Bevat o.a. locatie, aantal woningen en status  
+- Overzicht van geplande en onderzochte woningbouwprojecten  
+- Samengesteld door gemeente, raad en participatieprocessen  
 
-Deze lijst is handmatig opgeschoond en verrijkt met coördinaten via geocoding.
+Deze lijst is handmatig opgeschoond en gegeocodeerd.
 
 ---
 
@@ -96,19 +95,26 @@ De data wordt verwerkt via een Python pipeline (`pipeline.py`):
 3. Woningen worden ruimtelijk gekoppeld aan buurten (spatial join)  
 4. Een model berekent per woning een splitsingskans  
 5. Potentieel wordt geaggregeerd per buurt  
-6. De 1.200-lijst wordt ingelezen, opgeschoond en gegeocodeerd  
-7. Resultaten worden opgeslagen als GeoJSON en CSV  
+6. Klimaatdata (schaduw) wordt toegevoegd per buurt  
+7. De 1.200-lijst wordt ingelezen en gegeocodeerd  
+8. Resultaten worden opgeslagen als GeoJSON en CSV  
+
+De pipeline is robuust opgezet en kan omgaan met:
+
+- API fouten (retry-mechanisme)  
+- ontbrekende data  
+- variaties in bronbestanden  
 
 ---
 
 ## Wat laat de applicatie zien?
 
-### Kaart (kern van de analyse)
+### Kaart
 
 De kaart combineert drie lagen:
 
 #### 🔴 Buurten
-- Tonen het totale splitsingspotentieel per buurt  
+- Totaal potentieel voor extra woningen  
 - Gebaseerd op aggregatie van individuele woningen  
 
 #### 🔵 Woningen
@@ -116,61 +122,61 @@ De kaart combineert drie lagen:
 - Met indicatieve kans op splitsing  
 
 #### 🟣 Projecten
-- Locaties uit de 1.200-lijst  
 - Geplande woningbouw  
+- Gebaseerd op de 1.200-lijst  
 
 ---
 
-### Analyse: projecten vs potentieel
+### Analyse
 
-Voor elk project wordt gekeken:
+Per project wordt gekeken naar:
 
-- In welke buurt ligt het?  
-- Hoe groot is het lokale splitsingspotentieel?  
-- Hoe verhoudt dit zich tot de omvang van het project?  
+- het lokale splitsingspotentieel  
+- de omvang van het project  
+- de leefbaarheid (schaduw / hittestress)  
 
-Dit resulteert in drie categorieën:
+Dit resulteert in:
 
-- 🔴 Overbelast  
-  → veel geplande woningen, weinig aanvullend potentieel  
+#### Gebruik (%)
+Hoeveel van het lokale potentieel wordt benut
 
-- 🟢 Onderbenut  
-  → veel potentieel, weinig plannen  
+#### Overbelasting (x)
+Hoeveel groter een project is dan het beschikbare potentieel
 
-- 🟡 In balans  
-  → plannen en potentieel liggen redelijk op één lijn  
+#### Klimaatcontext
+Mate van schaduw (indicatie voor hittestress)
 
 ---
 
-## Interpretatie
+## Belangrijkste inzichten
 
-De tool laat zien dat:
+De analyse laat zien dat:
 
-- woningbouw niet altijd plaatsvindt in buurten met het grootste potentieel  
-- bestaande woningvoorraad een aanvullende rol kan spelen  
-- er mogelijk sprake is van een mismatch tussen plannen en potentieel  
+- woningbouw zich niet altijd richt op buurten met het grootste potentieel  
+- buurten met veel potentieel vaak relatief weinig benut worden  
+- sommige projecten plaatsvinden in gebieden met beperkte schaduw (klimaatgevoelig)  
 
-Belangrijk:
+Daarmee ontstaat een belangrijk inzicht:
 
-> Het model toont **technisch potentieel**, geen directe realisatiecapaciteit.
+> De plekken waar ruimte is, de plekken waar gebouwd wordt en de plekken waar het prettig wonen is, vallen niet vanzelf samen.
 
 ---
 
 ## Beperkingen
 
-- Geen inzicht in werkelijke huishoudgrootte per woning  
-- Geen rekening met regelgeving, eigendom of fysieke beperkingen  
-- Geocoding van projectlocaties is indicatief  
-- Model is vereenvoudigd en lineair  
+- Model is indicatief en vereenvoudigd  
+- Geen inzicht in huishoudgrootte per woning  
+- Geen rekening met regelgeving of eigendom  
+- Klimaatdata is een proxy (schaduw ≠ volledige hittestress)  
 
 ---
 
-## Gebruik voor andere gemeenten
+## Gebruik en hergebruik
 
-Deze tool is reproduceerbaar:
+Deze tool is reproduceerbaar voor andere gemeenten:
 
 1. Fork de repository  
-2. Pas de gemeentefilter aan in de pipeline  
+2. Pas de gemeentefilter aan  
 3. Voeg lokale projectdata toe  
 4. Deploy via Streamlit  
 
@@ -178,7 +184,7 @@ Deze tool is reproduceerbaar:
 
 ## Conclusie
 
-De Huizen Woningsplitsing Analyzer laat zien dat de woningbouwopgave niet alleen een kwestie is van uitbreiden, maar ook van beter benutten.
+De Huizen Woningsplitsing Analyzer laat zien dat de woningbouwopgave niet alleen gaat over uitbreiden, maar ook over beter benutten van wat er al is.
 
 Het biedt een aanvullend perspectief op de vraag:
 
