@@ -255,10 +255,28 @@ if len(projects) and len(split_buurt):
     analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
     analyse["Verhouding"] = analyse["Verhouding"].round(2)
 
+    cols = [
+        "benaming",
+        "buurtnaam",
+        "wijktype",
+        "Projectgrootte",
+        "Potentieel (woningen)",
+        "schaduw",
+        "Verhouding",
+        "Categorie",
+        "Schaduw categorie",
+        "Conclusie"
+    ]
+    
+    if "Potentieel per 1000 inwoners" in analyse.columns:
+        cols.append("Potentieel per 1000 inwoners")
+    
     st.dataframe(
-        analyse[
-            ["benaming", "buurtnaam", "wijktype", "Projectgrootte", "Potentieel (woningen)", "schaduw", "Verhouding", "Categorie", "Schaduw categorie", "Conclusie", "Potentieel per 1000 inwoners"]
-        ].rename(columns={"buurtnaam": "Buurt", "wijktype": "Wijktype", "schaduw": "Schaduw (%)" })
+        analyse[cols].rename(columns={
+            "buurtnaam": "Buurt",
+            "wijktype": "Wijktype",
+            "schaduw": "Schaduw (%)"
+        })
     )
 
 # -------------------------
