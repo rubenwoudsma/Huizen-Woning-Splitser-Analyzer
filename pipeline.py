@@ -173,32 +173,42 @@ def split_analysis(
 def load_heatstress(path: Path) -> pd.DataFrame:
     df = pd.read_excel(path)
 
-    # kolomnamen opschonen
     df.columns = [str(c).lower().strip() for c in df.columns]
 
-    print("🔍 Kolommen in klimaatexcel:", df.columns.tolist())
+    # 🔥 juiste kolommen kiezen
+    cols = {
+        "buurtcode": None,
+        "pet35": None,
+        "pet41": None,
+        "pet46": None,
+        "pet51": None,
+    }
 
-    buurt_col = None
-    hitte_col = None
-
-    # 🔥 buurtcode zoeken
     for col in df.columns:
-        if "buurtcode" in col or "bu_code" in col:
-            buurt_col = col
+        if "buurtcode" in col:
+            cols["buurtcode"] = col
+        elif "pet35" in col:
+            cols["pet35"] = col
+        elif "pet41" in col:
+            cols["pet41"] = col
+        elif "pet46" in col:
+            cols["pet46"] = col
+        elif "pet51" in col:
+            cols["pet51"] = col
 
-    # 🔥 hittestress zoeken (flexibel!)
-    for col in df.columns:
-        if "gevoel" in col or "temperatuur" in col:
-            hitte_col = col
+    # check
+    if cols["buurtcode"] is None:
+        raise ValueError("Geen buurtcode gevonden in klimaatexcel")
 
-    if buurt_col is None or hitte_col is None:
-        print("⚠️ Kon juiste kolommen niet vinden in klimaatexcel")
-        return pd.DataFrame(columns=["buurtcode", "hittestress"])
+    # 🔥 bereken hittestress index
+    df["hittestress"] = (
+        df.get(cols["pet35"], 0)
+        + df.get(cols["pet41"], 0)
+        + df.get(cols["pet46"], 0)
+        + df.get(cols["pet51"], 0)
+    )
 
-    df = df.rename(columns={
-        buurt_col: "buurtcode",
-        hitte_col: "hittestress"
-    })
+    df = df.rename(columns={cols["buurtcode"]: "buurtcode"})
 
     return df[["buurtcode", "hittestress"]]
 
