@@ -253,12 +253,22 @@ if len(projects) and len(split_buurt):
 
     analyse["Conclusie"] = analyse.apply(gecombineerde_analyse, axis=1)
 
-    analyse["Gebruik potentieel (%)"] = (
-    analyse["Verhouding"]
+    # 🔥 Gebruik (max 100%)
+    analyse["Gebruik (%)"] = (
+        analyse["Verhouding"]
         .replace([float("inf"), -float("inf")], pd.NA)
+        .clip(upper=1)
         .fillna(0)
         * 100
     ).round(0).astype(int)
+    
+    # 🔥 Overbelasting factor (alleen >1)
+    analyse["Overbelasting (x)"] = (
+        analyse["Verhouding"]
+        .where(analyse["Verhouding"] > 1)
+        .replace([float("inf"), -float("inf")], pd.NA)
+        .round(1)
+    )
 
     analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
     analyse["Verhouding"] = analyse["Verhouding"].round(2)
@@ -270,7 +280,8 @@ if len(projects) and len(split_buurt):
         "Projectgrootte",
         "Potentieel (woningen)",
         "Schaduw (%)",
-        "Gebruik potentieel (%)",
+        "Gebruik (%)",
+        "Overbelasting (x)",
         "Categorie",
         "Schaduw categorie",
         "Conclusie"
@@ -287,6 +298,10 @@ if len(projects) and len(split_buurt):
             "buurtnaam": "Buurt",
             "wijktype": "Wijktype"
         })
+    )
+    st.caption(
+        "Gebruik (%) toont hoeveel van het lokale woningpotentieel wordt benut. "
+        "Overbelasting (x) laat zien hoe groot het project is ten opzichte van dat potentieel."
     )
 
 # -------------------------
