@@ -230,7 +230,8 @@ if len(projects) and len(split_buurt):
             return "🟢 Veel schaduw (koel)"
 
     analyse["Schaduw categorie"] = analyse["schaduw"].apply(categoriseer_schaduw)
-
+    analyse["Schaduw (%)"] = analyse["schaduw"].round(2)
+    
     def gecombineerde_analyse(row):
         if pd.isna(row["Verhouding"]) or pd.isna(row["schaduw"]):
             return "Onbekend"
@@ -252,6 +253,8 @@ if len(projects) and len(split_buurt):
 
     analyse["Conclusie"] = analyse.apply(gecombineerde_analyse, axis=1)
 
+    analyse["Gebruik potentieel (%)"] = (analyse["Verhouding"] * 100).round(0).astype(int)
+
     analyse["Potentieel (woningen)"] = analyse["Potentieel (woningen)"].round(0).astype(int)
     analyse["Verhouding"] = analyse["Verhouding"].round(2)
 
@@ -261,21 +264,23 @@ if len(projects) and len(split_buurt):
         "wijktype",
         "Projectgrootte",
         "Potentieel (woningen)",
-        "schaduw",
-        "Verhouding",
+        "Schaduw (%)",
+        "Gebruik potentieel (%)",
         "Categorie",
         "Schaduw categorie",
         "Conclusie"
     ]
     
     if "Potentieel per 1000 inwoners" in analyse.columns:
-        cols.append("Potentieel per 1000 inwoners")
+        analyse = analyse.rename(columns={
+            "Potentieel per 1000 inwoners": "Potentieel per 1000 inwoners (relatief)"
+        })
+        cols.append("Potentieel per 1000 inwoners (relatief)")
     
     st.dataframe(
         analyse[cols].rename(columns={
             "buurtnaam": "Buurt",
-            "wijktype": "Wijktype",
-            "schaduw": "Schaduw (%)"
+            "wijktype": "Wijktype"
         })
     )
 
