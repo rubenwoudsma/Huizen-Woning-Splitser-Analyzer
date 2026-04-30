@@ -206,36 +206,35 @@ if len(projects) and len(split_buurt):
     analyse["Categorie"] = analyse.apply(categoriseer, axis=1)
 
     def categoriseer_schaduw(val):
-    if pd.isna(val):
-        return "Onbekend"
-    elif val < 40:
-        return "🔴 Weinig schaduw (warm)"
-    elif val < 60:
-        return "🟡 Gemiddeld"
-    else:
-        return "🟢 Veel schaduw (koel)"
+        if pd.isna(val):
+            return "Onbekend"
+        elif val < 40:
+            return "🔴 Weinig schaduw (warm)"
+        elif val < 60:
+            return "🟡 Gemiddeld"
+        else:
+            return "🟢 Veel schaduw (koel)"
 
     analyse["Schaduw categorie"] = analyse["schaduw"].apply(categoriseer_schaduw)
 
     def gecombineerde_analyse(row):
-
-    if pd.isna(row["Verhouding"]) or pd.isna(row["schaduw"]):
-        return "Onbekend"
-
-    if row["Verhouding"] > 1 and row["schaduw"] < 40:
-        return "🔴 Hoog risico (veel bouw + weinig schaduw)"
-
-    elif row["Verhouding"] < 0.5 and row["schaduw"] > 60:
-        return "🟢 Kansrijk (ruimte + koel)"
-
-    elif row["Verhouding"] > 1:
-        return "🟠 Druk gebied"
-
-    elif row["schaduw"] < 40:
-        return "🟠 Klimaatgevoelig"
-
-    else:
-        return "🟡 Gemiddeld"
+        if pd.isna(row["Verhouding"]) or pd.isna(row["schaduw"]):
+            return "Onbekend"
+    
+        if row["Verhouding"] > 1 and row["schaduw"] < 40:
+            return "🔴 Hoog risico (veel bouw + weinig schaduw)"
+    
+        elif row["Verhouding"] < 0.5 and row["schaduw"] > 60:
+            return "🟢 Kansrijk (ruimte + koel)"
+    
+        elif row["Verhouding"] > 1:
+            return "🟠 Druk gebied"
+    
+        elif row["schaduw"] < 40:
+            return "🟠 Klimaatgevoelig"
+    
+        else:
+            return "🟡 Gemiddeld"
 
     analyse["Conclusie"] = analyse.apply(gecombineerde_analyse, axis=1)
 
