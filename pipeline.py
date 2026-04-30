@@ -95,7 +95,7 @@ def get_bag_huizen():
         r = safe_request(url, params=params if "?" not in url else None)
 
         if r is None:
-            print("⚠️ Stop BAG ophalen wegens fout")
+            print("⚠️ BAG API faalt → gebruik partial dataset")
             break
 
         data = r.json()
@@ -107,6 +107,9 @@ def get_bag_huizen():
 
         time.sleep(0.2)  # throttle
 
+    if len(features) < 1000:
+        print("⚠️ BAG dataset mogelijk incompleet")
+    
     if not features:
         print("❌ Geen BAG data opgehaald")
         return gpd.GeoDataFrame(columns=["geometry", "oppervlakte_m2"])
@@ -171,46 +174,37 @@ def split_analysis(
 # -------------------------
 
 def load_heatstress(path: Path) -> pd.DataFrame:
-    df = pd.read_excel(path)
+    try:
+        # 🔥 expliciet juiste sheet pakken
+        df = pd.read_excel(path, sheet_name=0)
 
-    df.columns = [str(c).lower().strip() for c in df.columns]
+        df.columns = [str(c).lower().strip() for c in df.columns]
 
-    # 🔥 juiste kolommen kiezen
-    cols = {
-        "buurtcode": None,
-        "pet35": None,
-        "pet41": None,
-        "pet46": None,
-        "pet51": None,
-    }
+        print("🔍 Klimaat kolommen:", df.columns.tolist())
 
-    for col in df.columns:
-        if "buurtcode" in col:
-            cols["buurtcode"] = col
-        elif "pet35" in col:
-            cols["pet35"] = col
-        elif "pet41" in col:
-            cols["pet41"] = col
-        elif "pet46" in col:
-            cols["pet46"] = col
-        elif "pet51" in col:
-            cols["pet51"] = col
+        # 🔥 juiste buurtcode kolom zoeken
+        buurt_col = None
+        for col in df.columns:
+            if "buurtcode" in col:
+                buurt_col = col
 
-    # check
-    if cols["buurtcode"] is None:
-        raise ValueError("Geen buurtcode gevonden in klimaatexcel")
+        # 🔥 PET kolommen zoeken
+        pet_cols = [col for col in df.columns if "pet" in col]
 
-    # 🔥 bereken hittestress index
-    df["hittestress"] = (
-        df.get(cols["pet35"], 0)
-        + df.get(cols["pet41"], 0)
-        + df.get(cols["pet46"], 0)
-        + df.get(cols["pet51"], 0)
-    )
+        if buurt_col is None or len(pet_cols) == 0:
+            print("⚠️ Klimaatdata niet bruikbaar → overslaan")
+            return pd.DataFrame(columns=["buurtcode", "hittestress"])
 
-    df = df.rename(columns={cols["buurtcode"]: "buurtcode"})
+        # 🔥 hittestress berekenen (som van PET klassen)
+        df["hittestress"] = df[pet_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
 
-    return df[["buurtcode", "hittestress"]]
+        df = df.rename(columns={buurt_col: "buurtcode"})
+
+        return df[["buurtcode", "hittestress"]]
+
+    except Exception as e:
+        print(f"⚠️ Fout bij laden klimaatdata: {e}")
+        return pd.DataFrame(columns=["buurtcode", "hittestress"])
 
 
 # -------------------------
@@ -246,8 +240,14 @@ def main():
     # Klimaat toevoegen
     heat_path = Path("data/raw/Downloadbuurtdashboard.xlsx")
     if heat_path.exists():
-        heat = load_heatstress(heat_path)
-        by_buurt = by_buurt.merge(heat, on="buurtcode", how="left")
+        try:
+            heat = load_heatstress(heat_path)
+            if len(heat) > 0:
+                by_buurt = by_buurt.merge(heat, on="buurtcode", how="left")
+            else:
+                print("⚠️ Geen klimaatdata toegevoegd")
+        except Exception as e:
+            print(f"⚠️ Klimaatdata mislukt: {e}")
 
     by_buurt.to_csv(out / "split_potential_buurt_public.csv", index=False)
 
