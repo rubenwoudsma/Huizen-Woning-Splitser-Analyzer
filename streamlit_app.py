@@ -368,3 +368,15 @@ with colB:
         )
         
         st.plotly_chart(fig)
+
+st.subheader("Klimaat vs potentieel")
+
+fig = px.scatter(
+    analyse,
+    x="schaduw",
+    y="Potentieel (woningen)",
+    color="Categorie",
+    title="Potentieel vs schaduw"
+)
+
+st.plotly_chart(fig, use_container_width=True)
