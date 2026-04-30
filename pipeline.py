@@ -175,27 +175,27 @@ def split_analysis(
 
 def load_heatstress(path: Path) -> pd.DataFrame:
     try:
-        # 🔥 expliciet juiste sheet pakken
-        df = pd.read_excel(path, sheet_name=0)
+        # 🔥 juiste tabblad kiezen
+        df = pd.read_excel(path, sheet_name="Data")
 
         df.columns = [str(c).lower().strip() for c in df.columns]
 
         print("🔍 Klimaat kolommen:", df.columns.tolist())
 
-        # 🔥 juiste buurtcode kolom zoeken
+        # buurtcode vinden
         buurt_col = None
         for col in df.columns:
             if "buurtcode" in col:
                 buurt_col = col
 
-        # 🔥 PET kolommen zoeken
+        # PET kolommen vinden
         pet_cols = [col for col in df.columns if "pet" in col]
 
         if buurt_col is None or len(pet_cols) == 0:
             print("⚠️ Klimaatdata niet bruikbaar → overslaan")
             return pd.DataFrame(columns=["buurtcode", "hittestress"])
 
-        # 🔥 hittestress berekenen (som van PET klassen)
+        # 🔥 hittestress berekenen
         df["hittestress"] = df[pet_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
 
         df = df.rename(columns={buurt_col: "buurtcode"})
