@@ -175,36 +175,42 @@ def split_analysis(
 
 def load_heatstress(path: Path) -> pd.DataFrame:
     try:
-        # 🔥 juiste tabblad kiezen
         df = pd.read_excel(path, sheet_name="Data")
 
         df.columns = [str(c).lower().strip() for c in df.columns]
 
         print("🔍 Klimaat kolommen:", df.columns.tolist())
 
-        # buurtcode vinden
         buurt_col = None
+        shadow_col = None
+
+        # 🔍 buurtcode zoeken
         for col in df.columns:
             if "buurtcode" in col:
                 buurt_col = col
 
-        # PET kolommen vinden
-        pet_cols = [col for col in df.columns if "pet" in col]
+        # 🔍 schaduw kolom zoeken (AHN4)
+        for col in df.columns:
+            if "shdtot" in col and "ahn4" in col:
+                shadow_col = col
 
-        if buurt_col is None or len(pet_cols) == 0:
-            print("⚠️ Klimaatdata niet bruikbaar → overslaan")
-            return pd.DataFrame(columns=["buurtcode", "hittestress"])
+        if buurt_col is None or shadow_col is None:
+            print("⚠️ Schaduwdata niet bruikbaar → overslaan")
+            return pd.DataFrame(columns=["buurtcode", "schaduw"])
 
-        # 🔥 hittestress berekenen
-        df["hittestress"] = df[pet_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        df = df.rename(columns={
+            buurt_col: "buurtcode",
+            shadow_col: "schaduw"
+        })
 
-        df = df.rename(columns={buurt_col: "buurtcode"})
+        # numeriek maken
+        df["schaduw"] = pd.to_numeric(df["schaduw"], errors="coerce")
 
-        return df[["buurtcode", "hittestress"]]
+        return df[["buurtcode", "schaduw"]]
 
     except Exception as e:
         print(f"⚠️ Fout bij laden klimaatdata: {e}")
-        return pd.DataFrame(columns=["buurtcode", "hittestress"])
+        return pd.DataFrame(columns=["buurtcode", "schaduw"])
 
 
 # -------------------------
@@ -242,12 +248,14 @@ def main():
     if heat_path.exists():
         try:
             heat = load_heatstress(heat_path)
+        
             if len(heat) > 0:
                 by_buurt = by_buurt.merge(heat, on="buurtcode", how="left")
             else:
-                print("⚠️ Geen klimaatdata toegevoegd")
+                print("⚠️ Geen schaduwdata toegevoegd")
+        
         except Exception as e:
-            print(f"⚠️ Klimaatdata mislukt: {e}")
+            print(f"⚠️ Schaduwdata mislukt: {e}")
 
     by_buurt.to_csv(out / "split_potential_buurt_public.csv", index=False)
 
